@@ -166,6 +166,71 @@ def load_products(xlsx_path: Path) -> list[Product]:
     return products
 
 
+def products_from_rows(rows: list[list]) -> list[Product]:
+    if not rows:
+        return []
+    headers = {
+        str(value).strip().lower(): index
+        for index, value in enumerate(rows[0])
+        if value
+    }
+
+    active_col = headers.get("active", headers.get("actif"))
+    name_col = headers.get("product name", headers.get("nom produit"))
+    url_col = headers.get("url to monitor", headers.get("url a surveiller", headers.get("url getyourguide")))
+    emails_col = headers.get("alert emails", headers.get("emails alerte"))
+    threshold_col = headers.get("star threshold", headers.get("seuil etoiles"))
+    platform_col = headers.get("platform", headers.get("plateforme"))
+    language_col = headers.get("language", headers.get("langue"))
+
+    if None in {active_col, name_col, url_col, emails_col}:
+        raise ValueError("Missing required columns in Google Sheet. Expected: Active, Product name, URL to monitor, Alert emails.")
+
+    products: list[Product] = []
+    for row_number, row in enumerate(rows[1:], start=2):
+        def cell(index, default=""):
+            return row[index] if index is not None and index < len(row) else default
+
+        active = str(cell(active_col)).strip().lower()
+        name = str(cell(name_col)).strip()
+        url = str(cell(url_col)).strip()
+        emails = split_emails(str(cell(emails_col)))
+        threshold = cell(threshold_col, 4)
+        platform = str(cell(platform_col, "auto")).strip().lower()
+        language = str(cell(language_col, "en")).strip()
+
+        if active not in {"oui", "yes", "true", "1", "x"}:
+            continue
+        if not name and not url:
+            continue
+        if not name or not url or not emails:
+            print(f"Row {row_number} skipped: product name, URL, or alert emails are missing.")
+            continue
+
+        products.append(Product(name=name, url=url, emails=emails, threshold=float(threshold or 4), platform=platform, language=language))
+    return products
+
+
+def google_client_from_env():
+    service_account_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+    if not service_account_json:
+        return None
+    credentials = json.loads(service_account_json)
+    return gspread.service_account_from_dict(credentials)
+
+
+def load_products_from_google_sheet(sheet_url: str) -> list[Product]:
+    client = google_client_from_env()
+    if client is None:
+        raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON is required to read products directly from Google Sheets.")
+    spreadsheet = client.open_by_url(sheet_url)
+    worksheet = spreadsheet.worksheet("Produits")
+    rows = worksheet.get_all_values()
+    products = products_from_rows(rows)
+    print(f"Loaded {len(products)} active product(s) directly from Google Sheets.")
+    return products
+
+
 def google_sheet_export_url(sheet_url: str) -> str:
     match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", sheet_url)
     if not match:
@@ -805,12 +870,9 @@ def get_or_create_worksheet(spreadsheet, title: str, rows: int = 100, cols: int 
 
 
 def update_google_sheet_dashboard(sheet_url: str, summaries: list[dict]) -> None:
-    service_account_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
-    if not service_account_json:
+    client = google_client_from_env()
+    if client is None:
         raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON is required to update the shared Google Sheet dashboard.")
-
-    credentials = json.loads(service_account_json)
-    client = gspread.service_account_from_dict(credentials)
     spreadsheet = client.open_by_url(sheet_url)
 
     dashboard = get_or_create_worksheet(spreadsheet, "Dashboard", rows=max(100, len(summaries) + 10), cols=12)
@@ -876,11 +938,14 @@ def main() -> int:
     load_dotenv()
     sheet_url = args.sheet_url or os.environ.get("GOOGLE_SHEET_URL", "")
     input_xlsx = Path(args.xlsx)
-    if sheet_url:
+    if sheet_url and os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip():
+        products = load_products_from_google_sheet(sheet_url)
+    elif sheet_url:
         input_xlsx = download_google_sheet(sheet_url, Path("voxy_current_shared_sheet.xlsx"))
         print(f"Downloaded shared Google Sheet to: {input_xlsx}")
-
-    products = load_products(input_xlsx)
+        products = load_products(input_xlsx)
+    else:
+        products = load_products(input_xlsx)
     seen = load_seen(Path(args.state))
     new_seen = set(seen)
     subject_prefix = os.environ.get("ALERT_SUBJECT_PREFIX", "[Alerte avis]")
