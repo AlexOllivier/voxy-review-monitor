@@ -63,6 +63,7 @@ jobs:
           ALERT_SUBJECT_PREFIX: ${{ secrets.ALERT_SUBJECT_PREFIX }}
           TRANSLATE_REVIEWS_TO_ENGLISH: ${{ secrets.TRANSLATE_REVIEWS_TO_ENGLISH }}
           DEEPL_API_KEY: ${{ secrets.DEEPL_API_KEY }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         run: |
           FLAGS=""
           if [ "${{ github.event_name }}" = "schedule" ]; then
@@ -77,6 +78,7 @@ jobs:
           python voxy_review_monitor.py \
             --report voxy_dashboard_report.xlsx \
             --timezone Europe/Paris \
+            --update-google-sheet-dashboard \
             $FLAGS
 
       - name: Upload dashboard
