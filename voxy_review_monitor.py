@@ -598,6 +598,27 @@ def summarize_reviews(product: Product, reviews: list[Review]) -> dict:
         "suggestions": suggestions,
         "critical_points": critical_points,
         "reviews": reviews,
+        "status": "OK",
+        "error": "",
+    }
+
+
+def summarize_error(product: Product, error: Exception) -> dict:
+    return {
+        "product": product.name,
+        "url": product.url,
+        "platform": detect_platform(product),
+        "review_count": 0,
+        "global_score": None,
+        "low_review_count": 0,
+        "critical_review_count": 0,
+        "alert": False,
+        "themes": [],
+        "suggestions": ["Check whether the platform blocks automation or requires a platform-specific connector."],
+        "critical_points": [f"Voxy could not analyze this page: {error}"],
+        "reviews": [],
+        "status": "ERROR",
+        "error": str(error),
     }
 
 
@@ -642,6 +663,8 @@ def build_dashboard_report(summaries: list[dict], report_path: Path) -> None:
         "Alert",
         "Top themes",
         "Improvement suggestions",
+        "Status",
+        "Error",
         "URL",
     ])
     style_header(summary_sheet[1])
@@ -657,6 +680,8 @@ def build_dashboard_report(summaries: list[dict], report_path: Path) -> None:
             "ALERT: score below 3" if item["alert"] else "OK",
             "\n".join(item["themes"]),
             "\n".join(item["suggestions"]),
+            item.get("status", "OK"),
+            item.get("error", ""),
             item["url"],
         ])
         if item["alert"]:
@@ -678,6 +703,8 @@ def build_dashboard_report(summaries: list[dict], report_path: Path) -> None:
             ("Top themes", "\n".join(item["themes"]) or "No theme detected"),
             ("Improvement suggestions", "\n".join(item["suggestions"]) or "No suggestion available"),
             ("Critical points", "\n".join(item["critical_points"]) or "No critical point detected"),
+            ("Status", item.get("status", "OK")),
+            ("Error", item.get("error", "")),
         ]
         for metric, value in metrics:
             sheet.append([metric, value])
@@ -720,6 +747,8 @@ def google_rows_for_dashboard(summaries: list[dict]) -> list[list]:
         "Alert",
         "Top themes",
         "Improvement suggestions",
+        "Status",
+        "Error",
         "URL",
     ]]
     for item in summaries:
@@ -733,6 +762,8 @@ def google_rows_for_dashboard(summaries: list[dict]) -> list[list]:
             "ALERT: score below 3" if item["alert"] else "OK",
             "\n".join(item["themes"]),
             "\n".join(item["suggestions"]),
+            item.get("status", "OK"),
+            item.get("error", ""),
             item["url"],
         ])
     return rows
@@ -750,6 +781,8 @@ def google_rows_for_product(summary: dict) -> list[list]:
         ["Top themes", "\n".join(summary["themes"]) or "No theme detected"],
         ["Improvement suggestions", "\n".join(summary["suggestions"]) or "No suggestion available"],
         ["Critical points", "\n".join(summary["critical_points"]) or "No critical point detected"],
+        ["Status", summary.get("status", "OK")],
+        ["Error", summary.get("error", "")],
         [],
         ["Rating", "Author", "Date", "Source", "Review content"],
     ]
@@ -869,6 +902,7 @@ def main() -> int:
             reviews = fetch_reviews(product)
         except Exception as exc:
             print(f"Error while checking {product.name}: {exc}")
+            summaries.append(summarize_error(product, exc))
             continue
 
         for review in reviews:
