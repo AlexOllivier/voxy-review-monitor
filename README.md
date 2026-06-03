@@ -63,6 +63,7 @@ Optional:
 |---|---|
 | `TRANSLATE_REVIEWS_TO_ENGLISH` | `true` or `false` |
 | `DEEPL_API_KEY` | DeepL key if translation is enabled |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | Service account JSON if you want Voxy to update dashboard tabs inside the shared Google Sheet |
 
 ## 5. Test manually
 
@@ -89,7 +90,9 @@ This handles winter/summer time more safely:
 
 ## 7. Dashboard
 
-After each run, GitHub stores:
+After each run, Voxy updates the `Dashboard` sheet and one tab per product directly inside the shared Google Sheet when `GOOGLE_SERVICE_ACCOUNT_JSON` is configured.
+
+GitHub also stores a downloadable backup:
 
 `voxy_dashboard_report.xlsx`
 

@@ -3,3 +3,5 @@ openpyxl>=3.1
 playwright>=1.44
 python-dotenv>=1.0
 requests>=2.31
+gspread>=6.1
+google-auth>=2.29

@@ -19,6 +19,7 @@ try:
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
     from playwright.sync_api import sync_playwright
+    import gspread
     import requests
 except ImportError as exc:
     print(f"Module manquant: {exc.name}")
@@ -708,6 +709,93 @@ def build_dashboard_report(summaries: list[dict], report_path: Path) -> None:
     workbook.save(report_path)
 
 
+def google_rows_for_dashboard(summaries: list[dict]) -> list[list]:
+    rows = [[
+        "Product",
+        "Platform",
+        "Reviews detected",
+        "Global score",
+        "Low reviews",
+        "Critical reviews",
+        "Alert",
+        "Top themes",
+        "Improvement suggestions",
+        "URL",
+    ]]
+    for item in summaries:
+        rows.append([
+            item["product"],
+            item["platform"],
+            item["review_count"],
+            item["global_score"] if item["global_score"] is not None else "N/A",
+            item["low_review_count"],
+            item["critical_review_count"],
+            "ALERT: score below 3" if item["alert"] else "OK",
+            "\n".join(item["themes"]),
+            "\n".join(item["suggestions"]),
+            item["url"],
+        ])
+    return rows
+
+
+def google_rows_for_product(summary: dict) -> list[list]:
+    rows = [
+        ["Metric", "Value"],
+        ["Product", summary["product"]],
+        ["Platform", summary["platform"]],
+        ["URL", summary["url"]],
+        ["Reviews detected", summary["review_count"]],
+        ["Global score", summary["global_score"] if summary["global_score"] is not None else "N/A"],
+        ["Alert", "ALERT: score below 3" if summary["alert"] else "OK"],
+        ["Top themes", "\n".join(summary["themes"]) or "No theme detected"],
+        ["Improvement suggestions", "\n".join(summary["suggestions"]) or "No suggestion available"],
+        ["Critical points", "\n".join(summary["critical_points"]) or "No critical point detected"],
+        [],
+        ["Rating", "Author", "Date", "Source", "Review content"],
+    ]
+    for review in summary["reviews"]:
+        rows.append([
+            review.rating,
+            review.author or "Not detected",
+            review.date or "Not detected",
+            review.source or "Not specified",
+            review.text or "Not available on the page",
+        ])
+    return rows
+
+
+def get_or_create_worksheet(spreadsheet, title: str, rows: int = 100, cols: int = 12):
+    try:
+        return spreadsheet.worksheet(title)
+    except gspread.WorksheetNotFound:
+        return spreadsheet.add_worksheet(title=title, rows=rows, cols=cols)
+
+
+def update_google_sheet_dashboard(sheet_url: str, summaries: list[dict]) -> None:
+    service_account_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+    if not service_account_json:
+        raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON is required to update the shared Google Sheet dashboard.")
+
+    credentials = json.loads(service_account_json)
+    client = gspread.service_account_from_dict(credentials)
+    spreadsheet = client.open_by_url(sheet_url)
+
+    dashboard = get_or_create_worksheet(spreadsheet, "Dashboard", rows=max(100, len(summaries) + 10), cols=12)
+    dashboard.clear()
+    dashboard.update(google_rows_for_dashboard(summaries), value_input_option="USER_ENTERED")
+    dashboard.freeze(rows=1)
+
+    used_names = {"Produits", "Dashboard"}
+    for summary in summaries:
+        title = clean_sheet_name(summary["product"], used_names)
+        worksheet = get_or_create_worksheet(spreadsheet, title, rows=max(100, len(summary["reviews"]) + 20), cols=8)
+        worksheet.clear()
+        worksheet.update(google_rows_for_product(summary), value_input_option="USER_ENTERED")
+        worksheet.freeze(rows=1)
+
+    print("Shared Google Sheet dashboard updated.")
+
+
 def build_score_alert_body(summary: dict) -> str:
     return "\n".join([
         f"Voxy score alert for: {summary['product']}",
@@ -746,6 +834,7 @@ def main() -> int:
     parser.add_argument("--report", default="voxy_dashboard_report.xlsx", help="Dashboard report Excel file to generate.")
     parser.add_argument("--timezone", default="Europe/Paris", help="Timezone used to decide whether a review date is from today.")
     parser.add_argument("--only-at-hour", type=int, default=None, help="Exit unless the current hour in --timezone matches this value.")
+    parser.add_argument("--update-google-sheet-dashboard", action="store_true", help="Write Dashboard and product tabs back into the shared Google Sheet.")
     parser.add_argument("--include-past-dated-reviews", action="store_true", help="Include reviews whose detected date is before today.")
     parser.add_argument("--dry-run", action="store_true", help="Test without sending email.")
     parser.add_argument("--baseline", action="store_true", help="Save current reviews without sending alerts.")
@@ -829,6 +918,10 @@ def main() -> int:
     if summaries:
         build_dashboard_report(summaries, Path(args.report))
         print(f"Dashboard report saved: {args.report}")
+        if args.update_google_sheet_dashboard:
+            if not sheet_url:
+                raise RuntimeError("--update-google-sheet-dashboard requires GOOGLE_SHEET_URL or --sheet-url.")
+            update_google_sheet_dashboard(sheet_url, summaries)
 
     save_seen(Path(args.state), new_seen)
     return 0
