@@ -166,6 +166,46 @@ def clean_date_for_email(review: Review) -> str:
     return normalize_text(date_value) or "not detected"
 
 
+def trend_with_arrow(summary: dict | None) -> str:
+    if not summary:
+        return "No history"
+    trend = summary.get("trend", "No history")
+    if trend.startswith("Improving"):
+        return f"🟢 ↑ {trend}"
+    if trend.startswith("Declining"):
+        return f"🔴 ↓ {trend}"
+    if trend.startswith("Stable"):
+        return f"⚪ → {trend}"
+    return f"⚪ → {trend}"
+
+
+def product_health(summary: dict | None) -> str:
+    if not summary:
+        return "Needs attention"
+    score = summary.get("global_score")
+    critical = summary.get("critical_review_count", 0)
+    low = summary.get("low_review_count", 0)
+    trend = summary.get("trend", "")
+    if summary.get("status") == "ERROR":
+        return "Technical check needed"
+    if score is not None and score < 3:
+        return "Bad"
+    if critical > 0 or low >= 3 or trend.startswith("Declining"):
+        return "Watch"
+    return "Good"
+
+
+def product_health_with_icon(summary: dict | None) -> str:
+    health = product_health(summary)
+    if health == "Good":
+        return f"🟢 {health}"
+    if health == "Bad":
+        return f"🔴 {health}"
+    if health == "Technical check needed":
+        return f"🟠 {health}"
+    return f"🟡 {health}"
+
+
 def count_occurrences(text: str, keyword: str) -> int:
     return len(re.findall(re.escape(keyword), text, re.I))
 
@@ -809,32 +849,26 @@ def translate_to_english(text: str) -> str:
         return f"translation unavailable ({exc})"
 
 
-def build_alert_body(product: Product, reviews: list[Review]) -> str:
+def build_alert_body(product: Product, reviews: list[Review], summary: dict | None = None) -> str:
     ratings = [review.rating for review in reviews]
     avg_rating = round(sum(ratings) / len(ratings), 2) if ratings else "N/A"
     min_rating = min(ratings) if ratings else "N/A"
     critical_count = sum(1 for rating in ratings if rating < 3)
-    source_counts: dict[str, int] = {}
-    for review in reviews:
-        source = review.source or "not specified"
-        source_counts[source] = source_counts.get(source, 0) + 1
-    source_line = ", ".join(f"{source}: {count}" for source, count in sorted(source_counts.items()))
-    examples = representative_examples(reviews, limit=2)
     lines = [
-        "Voxy alert - low review(s)",
+        "Voxy alert",
         "",
         f"Product: {product.name}",
-        f"Alert rule: review rating <= {product.threshold}",
-        f"Flagged reviews: {len(reviews)}",
-        f"Average flagged rating: {avg_rating}/5",
-        f"Lowest rating: {min_rating}/5",
-        f"Critical reviews below 3: {critical_count}",
-        f"Sources: {source_line or 'not specified'}",
+        f"Status: {product_health_with_icon(summary)}",
+        f"Trend: {trend_with_arrow(summary)}",
+        f"Global score: {summary.get('global_score', 'N/A') if summary else 'N/A'}/5",
+        f"New low reviews: {len(reviews)}",
+        f"Average low-review score: {avg_rating}/5",
+        f"Lowest review score: {min_rating}/5",
+        f"Critical reviews < 3: {critical_count}",
+        f"Alert rule: review <= {product.threshold}/5",
         f"Checked: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
         f"Link: {product.url}",
     ]
-    if examples:
-        lines.extend(["", "Short examples:", *[f"- {example}" for example in examples]])
     return "\n".join(lines)
 
 
@@ -1028,51 +1062,35 @@ def build_dashboard_report(summaries: list[dict], report_path: Path) -> None:
 def google_rows_for_dashboard(summaries: list[dict]) -> list[list]:
     global_summary = build_global_synthesis(summaries)
     rows = [
-        ["Voxy global synthesis", ""],
-        ["Products analyzed", global_summary["product_count"]],
-        ["Reviews analyzed today", global_summary["total_reviews"]],
+        ["Voxy daily alert summary", ""],
+        ["Products checked", global_summary["product_count"]],
         ["Average score", global_summary["average_score"] if global_summary["average_score"] is not None else "N/A"],
         ["Low reviews", global_summary["low_reviews"]],
         ["Critical reviews", global_summary["critical_reviews"]],
-        ["Top themes", "\n".join(global_summary["top_themes"]) or "No theme detected"],
-        ["Priority improvement actions", "\n".join(global_summary["priority_actions"]) or "No priority action detected"],
-        ["Sources encountered", "\n\n".join(global_summary["sources"]) or "No source detected"],
         [],
         [
         "Product",
-        "Platform",
-        "Reviews detected",
-        "Global score",
+        "Status",
         "Trend",
+        "Global score",
         "Low reviews",
         "Critical reviews",
-        "Alert",
-        "Top themes",
-        "Improvement suggestions",
-        "Status",
-        "Error",
+        "Main issue",
+        "Action",
         "URL",
-        "Detailed improvement opportunities",
-        "Sources encountered",
         ],
     ]
     for item in summaries:
         rows.append([
             item["product"],
-            item["platform"],
-            item["review_count"],
+            product_health_with_icon(item),
+            trend_with_arrow(item),
             item["global_score"] if item["global_score"] is not None else "N/A",
-            item.get("trend", "No history"),
             item["low_review_count"],
             item["critical_review_count"],
-            "ALERT: score below 3" if item["alert"] else "OK",
-            "\n".join(item["themes"]),
-            "\n".join(item["suggestions"]),
-            item.get("status", "OK"),
-            item.get("error", ""),
+            ", ".join(item.get("themes", [])[:2]) or "No issue detected",
+            (item.get("suggestions") or ["No action needed"])[0],
             item["url"],
-            "\n\n".join(item.get("detailed_opportunities", [])),
-            item.get("sources_encountered", ""),
         ])
     return rows
 
@@ -1226,35 +1244,27 @@ def update_google_sheet_dashboard(sheet_url: str, summaries: list[dict]) -> None
     spreadsheet = client.open_by_url(sheet_url)
     annotate_trends_from_history(spreadsheet, summaries)
 
-    dashboard = get_or_create_worksheet(spreadsheet, "Dashboard", rows=max(100, len(summaries) + 10), cols=16)
+    dashboard = get_or_create_worksheet(spreadsheet, "Dashboard", rows=max(100, len(summaries) + 10), cols=8)
     dashboard.clear()
     dashboard.update(rectangularize_rows(google_rows_for_dashboard(summaries)), value_input_option="USER_ENTERED")
     dashboard.freeze(rows=1)
 
-    used_names = {"Produits", "Dashboard", "History"}
-    for summary in summaries:
-        title = clean_sheet_name(summary["product"], used_names)
-        worksheet = get_or_create_worksheet(spreadsheet, title, rows=max(100, len(summary["reviews"]) + 20), cols=8)
-        worksheet.clear()
-        worksheet.update(rectangularize_rows(google_rows_for_product(summary)), value_input_option="USER_ENTERED")
-        worksheet.freeze(rows=1)
-
     append_history_rows(spreadsheet, summaries)
-    print("Shared Google Sheet dashboard updated.")
+    print("Shared Google Sheet alert summary updated.")
 
 
 def build_score_alert_body(summary: dict) -> str:
     return "\n".join([
-        "Voxy alert - global score below 3",
+        "Voxy alert",
         "",
         f"Product: {summary['product']}",
-        f"Platform: {summary['platform']}",
+        f"Status: {product_health_with_icon(summary)}",
+        f"Trend: {trend_with_arrow(summary)}",
         f"Global score: {summary['global_score']}/5",
         f"Reviews detected: {summary['review_count']}",
-        f"Low reviews <= threshold: {summary['low_review_count']}",
-        f"Critical reviews below 3: {summary['critical_review_count']}",
-        f"Top themes: {', '.join(summary['themes']) or 'not detected'}",
-        f"Status: {summary.get('status', 'OK')}",
+        f"Low reviews: {summary['low_review_count']}",
+        f"Critical reviews < 3: {summary['critical_review_count']}",
+        f"Main issue: {', '.join(summary['themes'][:2]) or 'not detected'}",
         f"Link: {summary['url']}",
     ])
 
@@ -1354,7 +1364,7 @@ def main() -> int:
             print(f"OK: no new reviews rated {product.threshold} stars or less.")
             continue
 
-        body = build_alert_body(product, low_reviews)
+        body = build_alert_body(product, low_reviews, summary)
         subject = f"{subject_prefix} {product.name}: {len(low_reviews)} avis <= {product.threshold}"
         if args.dry_run:
             print("DRY RUN - email not sent")
