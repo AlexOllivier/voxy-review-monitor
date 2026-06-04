@@ -35,6 +35,7 @@ class Product:
     threshold: float
     platform: str
     language: str
+    country: str = ""
 
 
 @dataclass
@@ -372,6 +373,7 @@ def load_products(xlsx_path: Path) -> list[Product]:
     threshold_header = "star threshold" if "star threshold" in headers else "seuil etoiles"
     platform_header = "platform" if "platform" in headers else "plateforme"
     language_header = "language" if "language" in headers else "langue"
+    country_header = "country" if "country" in headers else "pays"
 
     required = [active_header, name_header, url_header, emails_header]
     missing = [name for name in required if name not in headers]
@@ -387,9 +389,11 @@ def load_products(xlsx_path: Path) -> list[Product]:
         threshold_cell = headers.get(threshold_header)
         platform_cell = headers.get(platform_header)
         language_cell = headers.get(language_header)
+        country_cell = headers.get(country_header)
         threshold = sheet.cell(row, threshold_cell).value if threshold_cell else 4
         platform = str(sheet.cell(row, platform_cell).value or "auto").strip().lower() if platform_cell else "auto"
         language = str(sheet.cell(row, language_cell).value or "en").strip() if language_cell else "en"
+        country = str(sheet.cell(row, country_cell).value or "").strip() if country_cell else ""
 
         if active not in {"oui", "yes", "true", "1", "x"}:
             continue
@@ -399,7 +403,7 @@ def load_products(xlsx_path: Path) -> list[Product]:
             print(f"Row {row} skipped: product name, URL, or alert emails are missing.")
             continue
 
-        products.append(Product(name=name, url=url, emails=emails, threshold=float(threshold or 4), platform=platform, language=language))
+        products.append(Product(name=name, url=url, emails=emails, threshold=float(threshold or 4), platform=platform, language=language, country=country))
     return products
 
 
@@ -419,6 +423,7 @@ def products_from_rows(rows: list[list]) -> list[Product]:
     threshold_col = headers.get("star threshold", headers.get("seuil etoiles"))
     platform_col = headers.get("platform", headers.get("plateforme"))
     language_col = headers.get("language", headers.get("langue"))
+    country_col = headers.get("country", headers.get("pays"))
 
     if None in {active_col, name_col, url_col, emails_col}:
         raise ValueError("Missing required columns in Google Sheet. Expected: Active, Product name, URL to monitor, Alert emails.")
@@ -435,6 +440,7 @@ def products_from_rows(rows: list[list]) -> list[Product]:
         threshold = cell(threshold_col, 4)
         platform = str(cell(platform_col, "auto")).strip().lower()
         language = str(cell(language_col, "en")).strip()
+        country = str(cell(country_col, "")).strip()
 
         if active not in {"oui", "yes", "true", "1", "x"}:
             continue
@@ -444,7 +450,7 @@ def products_from_rows(rows: list[list]) -> list[Product]:
             print(f"Row {row_number} skipped: product name, URL, or alert emails are missing.")
             continue
 
-        products.append(Product(name=name, url=url, emails=emails, threshold=float(threshold or 4), platform=platform, language=language))
+        products.append(Product(name=name, url=url, emails=emails, threshold=float(threshold or 4), platform=platform, language=language, country=country))
     return products
 
 
@@ -858,6 +864,7 @@ def build_alert_body(product: Product, reviews: list[Review], summary: dict | No
         "Voxy alert",
         "",
         f"Product: {product.name}",
+        f"Country: {product.country or 'N/A'}",
         f"Status: {product_health_with_icon(summary)}",
         f"Trend: {trend_with_arrow(summary)}",
         f"Global score: {summary.get('global_score', 'N/A') if summary else 'N/A'}/5",
@@ -901,6 +908,7 @@ def summarize_reviews(product: Product, reviews: list[Review]) -> dict:
         "product": product.name,
         "url": product.url,
         "platform": platform,
+        "country": product.country,
         "review_count": review_count,
         "global_score": global_score,
         "trend": "No history",
@@ -924,6 +932,7 @@ def summarize_error(product: Product, error: Exception) -> dict:
         "product": product.name,
         "url": product.url,
         "platform": detect_platform(product),
+        "country": product.country,
         "review_count": 0,
         "global_score": None,
         "trend": "No score",
@@ -975,6 +984,7 @@ def build_dashboard_report(summaries: list[dict], report_path: Path) -> None:
     summary_sheet.title = "Dashboard"
     summary_sheet.append([
         "Product",
+        "Country",
         "Platform",
         "Reviews detected",
         "Global score",
@@ -993,6 +1003,7 @@ def build_dashboard_report(summaries: list[dict], report_path: Path) -> None:
     for item in summaries:
         summary_sheet.append([
             item["product"],
+            item.get("country", ""),
             item["platform"],
             item["review_count"],
             item["global_score"] if item["global_score"] is not None else "N/A",
@@ -1017,6 +1028,7 @@ def build_dashboard_report(summaries: list[dict], report_path: Path) -> None:
         style_header(sheet[1])
         metrics = [
             ("Product", item["product"]),
+            ("Country", item.get("country", "")),
             ("Platform", item["platform"]),
             ("URL", item["url"]),
             ("Reviews detected", item["review_count"]),
@@ -1070,6 +1082,7 @@ def google_rows_for_dashboard(summaries: list[dict]) -> list[list]:
         [],
         [
         "Product",
+        "Country",
         "Status",
         "Trend",
         "Global score",
@@ -1083,6 +1096,7 @@ def google_rows_for_dashboard(summaries: list[dict]) -> list[list]:
     for item in summaries:
         rows.append([
             item["product"],
+            item.get("country", ""),
             product_health_with_icon(item),
             trend_with_arrow(item),
             item["global_score"] if item["global_score"] is not None else "N/A",
@@ -1099,6 +1113,7 @@ def google_rows_for_product(summary: dict) -> list[list]:
     rows = [
         ["Metric", "Value"],
         ["Product", summary["product"]],
+        ["Country", summary.get("country", "")],
         ["Platform", summary["platform"]],
         ["URL", summary["url"]],
         ["Reviews detected", summary["review_count"]],
@@ -1196,9 +1211,10 @@ def annotate_trends_from_history(spreadsheet, summaries: list[dict]) -> None:
 def append_history_rows(spreadsheet, summaries: list[dict]) -> None:
     history = get_or_create_worksheet(spreadsheet, "History", rows=max(100, len(summaries) + 20), cols=12)
     rows = history.get_all_values()
-    headers = [
+    headers_with_country = [
         "Run timestamp",
         "Product",
+        "Country",
         "Platform",
         "Reviews detected",
         "Global score",
@@ -1209,12 +1225,16 @@ def append_history_rows(spreadsheet, summaries: list[dict]) -> None:
         "URL",
     ]
     if not rows:
-        history.update([headers], value_input_option="USER_ENTERED")
+        history.update([headers_with_country], value_input_option="USER_ENTERED")
+        use_country_column = True
+    else:
+        current_headers = [header.strip().lower() for header in rows[0]]
+        use_country_column = "country" in current_headers
 
     run_timestamp = datetime.now(ZoneInfo("Europe/Paris")).strftime("%Y-%m-%d %H:%M")
     new_rows = []
     for summary in summaries:
-        new_rows.append([
+        row = [
             run_timestamp,
             summary["product"],
             summary["platform"],
@@ -1225,7 +1245,10 @@ def append_history_rows(spreadsheet, summaries: list[dict]) -> None:
             summary["critical_review_count"],
             summary.get("status", "OK"),
             summary["url"],
-        ])
+        ]
+        if use_country_column:
+            row.insert(2, summary.get("country", ""))
+        new_rows.append(row)
     if new_rows:
         history.append_rows(new_rows, value_input_option="USER_ENTERED")
 
@@ -1244,7 +1267,7 @@ def update_google_sheet_dashboard(sheet_url: str, summaries: list[dict]) -> None
     spreadsheet = client.open_by_url(sheet_url)
     annotate_trends_from_history(spreadsheet, summaries)
 
-    dashboard = get_or_create_worksheet(spreadsheet, "Dashboard", rows=max(100, len(summaries) + 10), cols=8)
+    dashboard = get_or_create_worksheet(spreadsheet, "Dashboard", rows=max(100, len(summaries) + 10), cols=9)
     dashboard.clear()
     dashboard.update(rectangularize_rows(google_rows_for_dashboard(summaries)), value_input_option="USER_ENTERED")
     dashboard.freeze(rows=1)
@@ -1258,6 +1281,7 @@ def build_score_alert_body(summary: dict) -> str:
         "Voxy alert",
         "",
         f"Product: {summary['product']}",
+        f"Country: {summary.get('country') or 'N/A'}",
         f"Status: {product_health_with_icon(summary)}",
         f"Trend: {trend_with_arrow(summary)}",
         f"Global score: {summary['global_score']}/5",
