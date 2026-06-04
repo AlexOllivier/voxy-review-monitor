@@ -72,12 +72,209 @@ IMPROVEMENT_LIBRARY = {
 }
 
 
+DETAILED_IMPROVEMENTS = {
+    "Guide / staff": [
+        "Audit the guide briefing: key facts, timing, tone, and expected storytelling flow.",
+        "Review low-rated guide mentions and coach recurring issues such as pace, clarity, or engagement.",
+        "Create a short quality checklist for guides before each departure.",
+    ],
+    "Organization": [
+        "Check meeting-point instructions against the real customer journey on site.",
+        "Reduce waiting time and make late-start escalation rules explicit.",
+        "Add clearer pre-tour timing and arrival instructions to confirmation messages.",
+    ],
+    "Value for money": [
+        "Compare the product promise, inclusions, and price with the actual delivered experience.",
+        "Clarify what is included and what is not included on the product page.",
+        "Use recent critical reviews to identify whether customers expected more access, time, or guidance.",
+    ],
+    "Communication": [
+        "Rewrite the pre-arrival instructions in simpler, step-by-step language.",
+        "Add one clear contact/escalation instruction for customers who cannot find the guide.",
+        "Check whether voucher, meeting point, and entry instructions say the same thing everywhere.",
+    ],
+    "Booking / access": [
+        "Audit the booking-to-entry flow: voucher, reserved entry, ticket scan, and staff handoff.",
+        "Clarify entry restrictions, security lines, and what 'reserved' or 'priority' means.",
+        "Review cancellation/refund complaints and standardize the response script.",
+    ],
+    "Experience quality": [
+        "Compare the advertised highlights with the parts customers actually mention in reviews.",
+        "Identify the weakest moments in the tour flow and redesign transitions or explanations.",
+        "Add a post-tour quality check for repeated disappointment signals.",
+    ],
+    "General satisfaction": [
+        "Read the latest low-rated reviews manually and group them by operational root cause.",
+        "Prioritize fixes that appear across several reviews or across several products.",
+        "Track whether the same complaint returns after the operational fix is made.",
+    ],
+}
+
+
 def split_emails(value: str) -> list[str]:
     return [email.strip() for email in re.split(r"[;,]", value or "") if email.strip()]
 
 
 def normalize_text(value: str) -> str:
     return " ".join(str(value or "").replace("\xa0", " ").split())
+
+
+def decode_jsonish_text(value: str) -> str:
+    text = str(value or "")
+    text = text.replace("\\u002F", "/")
+    text = text.replace("\\/", "/")
+    try:
+        text = bytes(text, "utf-8").decode("unicode_escape")
+    except Exception:
+        pass
+    return text
+
+
+def extract_json_field_text(value: str, field: str) -> str:
+    text = decode_jsonish_text(value)
+    match = re.search(rf'"{re.escape(field)}"\s*:\s*"((?:\\.|[^"\\])*)"', text, re.I)
+    if not match:
+        return ""
+    return normalize_text(decode_jsonish_text(match.group(1)))
+
+
+def clean_review_text_for_email(value: str, max_chars: int = 420) -> str:
+    text = decode_jsonish_text(value)
+    message = extract_json_field_text(text, "message")
+    if message:
+        text = message
+    else:
+        text = html_to_text(text)
+
+    # Remove obvious page/config fragments when extraction captured surrounding JSON.
+    text = re.sub(r'\{?("__entity"|type|content|media|review|author|rating|url)"?\s*:\s*', " ", text)
+    text = re.sub(r'https?://\S+', " ", text)
+    text = normalize_text(text)
+
+    if len(text) > max_chars:
+        text = text[:max_chars].rsplit(" ", 1)[0] + "..."
+    return text
+
+
+def clean_author_for_email(review: Review) -> str:
+    author = review.author or extract_json_field_text(review.text, "title") or extract_json_field_text(review.text, "shortTitle")
+    return normalize_text(author) or "not detected"
+
+
+def clean_date_for_email(review: Review) -> str:
+    date_value = review.date or extract_json_field_text(review.text, "subtitle") or extract_json_field_text(review.text, "shortSubtitle")
+    return normalize_text(date_value) or "not detected"
+
+
+def count_occurrences(text: str, keyword: str) -> int:
+    return len(re.findall(re.escape(keyword), text, re.I))
+
+
+def source_summary(reviews: list[Review]) -> str:
+    if not reviews:
+        return "No review source detected."
+    counts: dict[str, int] = {}
+    for review in reviews:
+        source = review.source or "not specified"
+        counts[source] = counts.get(source, 0) + 1
+    return "\n".join(f"{source}: {count}" for source, count in sorted(counts.items(), key=lambda item: item[1], reverse=True))
+
+
+def representative_examples(reviews: list[Review], limit: int = 3) -> list[str]:
+    examples = []
+    for review in sorted(reviews, key=lambda item: item.rating):
+        text = clean_review_text_for_email(review.text, max_chars=220)
+        if not text:
+            continue
+        examples.append(f"{review.rating}/5 - {text}")
+        if len(examples) >= limit:
+            break
+    return examples
+
+
+def analyze_improvement_opportunities(reviews: list[Review]) -> tuple[list[str], list[str]]:
+    if not reviews:
+        return (
+            ["No current review text was available for detailed improvement analysis."],
+            ["No review sources were available beyond page-level extraction."],
+        )
+
+    full_text = " ".join(clean_review_text_for_email(review.text, max_chars=1000).lower() for review in reviews if review.text)
+    low_reviews = [review for review in reviews if review.rating <= 4]
+    theme_scores = []
+    for theme, keywords in THEME_KEYWORDS.items():
+        count = sum(count_occurrences(full_text, keyword) for keyword in keywords)
+        if count:
+            theme_scores.append((theme, count))
+    theme_scores.sort(key=lambda item: item[1], reverse=True)
+
+    if not theme_scores:
+        theme_scores = [("General satisfaction", 1)]
+
+    opportunities = []
+    for theme, count in theme_scores[:4]:
+        examples = representative_examples(
+            [review for review in low_reviews if any(keyword in clean_review_text_for_email(review.text).lower() for keyword in THEME_KEYWORDS.get(theme, []))]
+            or low_reviews
+            or reviews,
+            limit=2,
+        )
+        actions = DETAILED_IMPROVEMENTS.get(theme, DETAILED_IMPROVEMENTS["General satisfaction"])
+        opportunity = [
+            f"{theme} ({count} signal{'s' if count != 1 else ''})",
+            "Recommended actions:",
+            *[f"- {action}" for action in actions[:3]],
+        ]
+        if examples:
+            opportunity.extend(["Evidence examples:", *[f"- {example}" for example in examples]])
+        opportunities.append("\n".join(opportunity))
+
+    sources = [
+        "Sources encountered:",
+        source_summary(reviews),
+        "",
+        "Extraction note:",
+        "Voxy uses structured page data, embedded rating patterns, visible review blocks, and page metadata when available. Some platforms expose partial JSON rather than clean review text, so Voxy cleans the text before writing the dashboard/email.",
+    ]
+    return opportunities, ["\n".join(sources)]
+
+
+def build_global_synthesis(summaries: list[dict]) -> dict:
+    product_count = len(summaries)
+    total_reviews = sum(item["review_count"] for item in summaries)
+    low_reviews = sum(item["low_review_count"] for item in summaries)
+    critical_reviews = sum(item["critical_review_count"] for item in summaries)
+    scored = [item["global_score"] for item in summaries if item["global_score"] is not None]
+    avg_score = round(sum(scored) / len(scored), 2) if scored else None
+    error_products = [item for item in summaries if item.get("status") == "ERROR"]
+
+    theme_counts: dict[str, int] = {}
+    for item in summaries:
+        for theme in item.get("themes", []):
+            theme_counts[theme] = theme_counts.get(theme, 0) + 1
+    top_themes = [theme for theme, _ in sorted(theme_counts.items(), key=lambda item: item[1], reverse=True)[:5]]
+
+    priority_actions = []
+    for theme in top_themes or ["General satisfaction"]:
+        actions = DETAILED_IMPROVEMENTS.get(theme, DETAILED_IMPROVEMENTS["General satisfaction"])
+        priority_actions.append(f"{theme}: {actions[0]}")
+    if error_products:
+        priority_actions.append(f"Technical follow-up: {len(error_products)} product(s) had extraction errors or platform limitations.")
+
+    sources = []
+    for item in summaries:
+        sources.append(f"{item['product']}: {item.get('sources_encountered', 'No source detected.')}")
+
+    return {
+        "product_count": product_count,
+        "total_reviews": total_reviews,
+        "average_score": avg_score,
+        "low_reviews": low_reviews,
+        "critical_reviews": critical_reviews,
+        "top_themes": top_themes,
+        "priority_actions": priority_actions,
+        "sources": sources,
+    }
 
 
 def html_to_text(value: str) -> str:
@@ -578,6 +775,15 @@ def send_email(recipients: list[str], subject: str, body: str) -> None:
         smtp.send_message(message)
 
 
+def try_send_email(recipients: list[str], subject: str, body: str) -> bool:
+    try:
+        send_email(recipients, subject, body)
+        return True
+    except Exception as exc:
+        print(f"Email delivery failed for {', '.join(recipients)}: {exc}")
+        return False
+
+
 def translate_to_english(text: str) -> str:
     if not text or os.environ.get("TRANSLATE_REVIEWS_TO_ENGLISH", "false").lower() not in {"true", "1", "yes", "oui"}:
         return ""
@@ -604,25 +810,31 @@ def translate_to_english(text: str) -> str:
 
 
 def build_alert_body(product: Product, reviews: list[Review]) -> str:
+    ratings = [review.rating for review in reviews]
+    avg_rating = round(sum(ratings) / len(ratings), 2) if ratings else "N/A"
+    min_rating = min(ratings) if ratings else "N/A"
+    critical_count = sum(1 for rating in ratings if rating < 3)
+    source_counts: dict[str, int] = {}
+    for review in reviews:
+        source = review.source or "not specified"
+        source_counts[source] = source_counts.get(source, 0) + 1
+    source_line = ", ".join(f"{source}: {count}" for source, count in sorted(source_counts.items()))
+    examples = representative_examples(reviews, limit=2)
     lines = [
-        f"Voxy review alert for: {product.name}",
-        f"Link: {product.url}",
-        f"Threshold: {product.threshold} stars or less",
-        f"Check date: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
+        "Voxy alert - low review(s)",
         "",
-        "Detected reviews:",
+        f"Product: {product.name}",
+        f"Alert rule: review rating <= {product.threshold}",
+        f"Flagged reviews: {len(reviews)}",
+        f"Average flagged rating: {avg_rating}/5",
+        f"Lowest rating: {min_rating}/5",
+        f"Critical reviews below 3: {critical_count}",
+        f"Sources: {source_line or 'not specified'}",
+        f"Checked: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
+        f"Link: {product.url}",
     ]
-    for index, review in enumerate(reviews, start=1):
-        translation = translate_to_english(review.text)
-        lines.extend([
-            "",
-            f"{index}. Rating: {review.rating}/5",
-            f"Author: {review.author or 'not detected'}",
-            f"Date: {review.date or 'not detected'}",
-            f"Review content: {review.text or 'not available on the page'}",
-            f"English translation: {translation or 'not enabled or not available'}",
-            f"Detection source: {review.source or 'not specified'}",
-        ])
+    if examples:
+        lines.extend(["", "Short examples:", *[f"- {example}" for example in examples]])
     return "\n".join(lines)
 
 
@@ -650,12 +862,15 @@ def summarize_reviews(product: Product, reviews: list[Review]) -> dict:
         critical_points.append(f"{review.rating}/5 - {text[:260]}")
 
     platform = detect_platform(product)
+    detailed_opportunities, source_notes = analyze_improvement_opportunities(reviews)
     return {
         "product": product.name,
         "url": product.url,
         "platform": platform,
         "review_count": review_count,
         "global_score": global_score,
+        "trend": "No history",
+        "trend_delta": "",
         "low_review_count": len(low_reviews),
         "critical_review_count": len(critical_reviews),
         "alert": bool(global_score is not None and global_score < 3),
@@ -663,6 +878,8 @@ def summarize_reviews(product: Product, reviews: list[Review]) -> dict:
         "suggestions": suggestions,
         "critical_points": critical_points,
         "reviews": reviews,
+        "detailed_opportunities": detailed_opportunities,
+        "sources_encountered": "\n".join(source_notes),
         "status": "OK",
         "error": "",
     }
@@ -675,6 +892,8 @@ def summarize_error(product: Product, error: Exception) -> dict:
         "platform": detect_platform(product),
         "review_count": 0,
         "global_score": None,
+        "trend": "No score",
+        "trend_delta": "",
         "low_review_count": 0,
         "critical_review_count": 0,
         "alert": False,
@@ -682,6 +901,8 @@ def summarize_error(product: Product, error: Exception) -> dict:
         "suggestions": ["Check whether the platform blocks automation or requires a platform-specific connector."],
         "critical_points": [f"Voxy could not analyze this page: {error}"],
         "reviews": [],
+        "detailed_opportunities": ["Technical issue: confirm whether the platform blocks automation, requires a platform-specific connector, or changed its page structure."],
+        "sources_encountered": "No review source could be analyzed because the page check failed.",
         "status": "ERROR",
         "error": str(error),
     }
@@ -723,6 +944,7 @@ def build_dashboard_report(summaries: list[dict], report_path: Path) -> None:
         "Platform",
         "Reviews detected",
         "Global score",
+        "Trend",
         "Low reviews",
         "Critical reviews",
         "Alert",
@@ -740,6 +962,7 @@ def build_dashboard_report(summaries: list[dict], report_path: Path) -> None:
             item["platform"],
             item["review_count"],
             item["global_score"] if item["global_score"] is not None else "N/A",
+            item.get("trend", "No history"),
             item["low_review_count"],
             item["critical_review_count"],
             "ALERT: score below 3" if item["alert"] else "OK",
@@ -764,6 +987,7 @@ def build_dashboard_report(summaries: list[dict], report_path: Path) -> None:
             ("URL", item["url"]),
             ("Reviews detected", item["review_count"]),
             ("Global score", item["global_score"] if item["global_score"] is not None else "N/A"),
+            ("Trend", item.get("trend", "No history")),
             ("Alert", "ALERT: score below 3" if item["alert"] else "OK"),
             ("Top themes", "\n".join(item["themes"]) or "No theme detected"),
             ("Improvement suggestions", "\n".join(item["suggestions"]) or "No suggestion available"),
@@ -802,11 +1026,24 @@ def build_dashboard_report(summaries: list[dict], report_path: Path) -> None:
 
 
 def google_rows_for_dashboard(summaries: list[dict]) -> list[list]:
-    rows = [[
+    global_summary = build_global_synthesis(summaries)
+    rows = [
+        ["Voxy global synthesis", ""],
+        ["Products analyzed", global_summary["product_count"]],
+        ["Reviews analyzed today", global_summary["total_reviews"]],
+        ["Average score", global_summary["average_score"] if global_summary["average_score"] is not None else "N/A"],
+        ["Low reviews", global_summary["low_reviews"]],
+        ["Critical reviews", global_summary["critical_reviews"]],
+        ["Top themes", "\n".join(global_summary["top_themes"]) or "No theme detected"],
+        ["Priority improvement actions", "\n".join(global_summary["priority_actions"]) or "No priority action detected"],
+        ["Sources encountered", "\n\n".join(global_summary["sources"]) or "No source detected"],
+        [],
+        [
         "Product",
         "Platform",
         "Reviews detected",
         "Global score",
+        "Trend",
         "Low reviews",
         "Critical reviews",
         "Alert",
@@ -815,13 +1052,17 @@ def google_rows_for_dashboard(summaries: list[dict]) -> list[list]:
         "Status",
         "Error",
         "URL",
-    ]]
+        "Detailed improvement opportunities",
+        "Sources encountered",
+        ],
+    ]
     for item in summaries:
         rows.append([
             item["product"],
             item["platform"],
             item["review_count"],
             item["global_score"] if item["global_score"] is not None else "N/A",
+            item.get("trend", "No history"),
             item["low_review_count"],
             item["critical_review_count"],
             "ALERT: score below 3" if item["alert"] else "OK",
@@ -830,6 +1071,8 @@ def google_rows_for_dashboard(summaries: list[dict]) -> list[list]:
             item.get("status", "OK"),
             item.get("error", ""),
             item["url"],
+            "\n\n".join(item.get("detailed_opportunities", [])),
+            item.get("sources_encountered", ""),
         ])
     return rows
 
@@ -842,10 +1085,13 @@ def google_rows_for_product(summary: dict) -> list[list]:
         ["URL", summary["url"]],
         ["Reviews detected", summary["review_count"]],
         ["Global score", summary["global_score"] if summary["global_score"] is not None else "N/A"],
+        ["Trend", summary.get("trend", "No history")],
         ["Alert", "ALERT: score below 3" if summary["alert"] else "OK"],
         ["Top themes", "\n".join(summary["themes"]) or "No theme detected"],
         ["Improvement suggestions", "\n".join(summary["suggestions"]) or "No suggestion available"],
+        ["Detailed improvement opportunities", "\n\n".join(summary.get("detailed_opportunities", [])) or "No detailed opportunity available"],
         ["Critical points", "\n".join(summary["critical_points"]) or "No critical point detected"],
+        ["Sources encountered", summary.get("sources_encountered", "No source detected")],
         ["Status", summary.get("status", "OK")],
         ["Error", summary.get("error", "")],
         [],
@@ -854,12 +1100,116 @@ def google_rows_for_product(summary: dict) -> list[list]:
     for review in summary["reviews"]:
         rows.append([
             review.rating,
-            review.author or "Not detected",
-            review.date or "Not detected",
+            clean_author_for_email(review),
+            clean_date_for_email(review),
             review.source or "Not specified",
-            review.text or "Not available on the page",
+            clean_review_text_for_email(review.text, max_chars=900) or "Not available on the page",
         ])
     return rows
+
+
+def rectangularize_rows(rows: list[list]) -> list[list]:
+    if not rows:
+        return rows
+    max_cols = max(len(row) for row in rows)
+    return [row + [""] * (max_cols - len(row)) for row in rows]
+
+
+def parse_optional_float(value) -> float | None:
+    if value is None:
+        return None
+    text = str(value).strip().replace(",", ".")
+    if not text or text.upper() in {"N/A", "NA", "NONE"}:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def trend_label(current_score: float | None, previous_score: float | None, sensitivity: float = 0.10) -> tuple[str, str]:
+    if current_score is None:
+        return "No score", ""
+    if previous_score is None:
+        return "No history", ""
+    delta = round(current_score - previous_score, 2)
+    if delta >= sensitivity:
+        return f"Improving (+{delta:.2f})", f"+{delta:.2f}"
+    if delta <= -sensitivity:
+        return f"Declining ({delta:.2f})", f"{delta:.2f}"
+    sign = "+" if delta > 0 else ""
+    return f"Stable ({sign}{delta:.2f})", f"{sign}{delta:.2f}"
+
+
+def latest_scores_from_history(spreadsheet) -> dict[str, float]:
+    try:
+        history = spreadsheet.worksheet("History")
+    except gspread.WorksheetNotFound:
+        return {}
+    rows = history.get_all_values()
+    if len(rows) < 2:
+        return {}
+    headers = [header.strip().lower() for header in rows[0]]
+    try:
+        product_index = headers.index("product")
+        score_index = headers.index("global score")
+    except ValueError:
+        return {}
+
+    latest: dict[str, float] = {}
+    for row in rows[1:]:
+        if len(row) <= max(product_index, score_index):
+            continue
+        product = row[product_index].strip()
+        score = parse_optional_float(row[score_index])
+        if product and score is not None:
+            latest[product] = score
+    return latest
+
+
+def annotate_trends_from_history(spreadsheet, summaries: list[dict]) -> None:
+    previous_scores = latest_scores_from_history(spreadsheet)
+    for summary in summaries:
+        label, delta = trend_label(summary.get("global_score"), previous_scores.get(summary["product"]))
+        summary["trend"] = label
+        summary["trend_delta"] = delta
+
+
+def append_history_rows(spreadsheet, summaries: list[dict]) -> None:
+    history = get_or_create_worksheet(spreadsheet, "History", rows=max(100, len(summaries) + 20), cols=12)
+    rows = history.get_all_values()
+    headers = [
+        "Run timestamp",
+        "Product",
+        "Platform",
+        "Reviews detected",
+        "Global score",
+        "Trend",
+        "Low reviews",
+        "Critical reviews",
+        "Status",
+        "URL",
+    ]
+    if not rows:
+        history.update([headers], value_input_option="USER_ENTERED")
+
+    run_timestamp = datetime.now(ZoneInfo("Europe/Paris")).strftime("%Y-%m-%d %H:%M")
+    new_rows = []
+    for summary in summaries:
+        new_rows.append([
+            run_timestamp,
+            summary["product"],
+            summary["platform"],
+            summary["review_count"],
+            summary["global_score"] if summary["global_score"] is not None else "N/A",
+            summary.get("trend", "No history"),
+            summary["low_review_count"],
+            summary["critical_review_count"],
+            summary.get("status", "OK"),
+            summary["url"],
+        ])
+    if new_rows:
+        history.append_rows(new_rows, value_input_option="USER_ENTERED")
 
 
 def get_or_create_worksheet(spreadsheet, title: str, rows: int = 100, cols: int = 12):
@@ -874,39 +1224,38 @@ def update_google_sheet_dashboard(sheet_url: str, summaries: list[dict]) -> None
     if client is None:
         raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON is required to update the shared Google Sheet dashboard.")
     spreadsheet = client.open_by_url(sheet_url)
+    annotate_trends_from_history(spreadsheet, summaries)
 
-    dashboard = get_or_create_worksheet(spreadsheet, "Dashboard", rows=max(100, len(summaries) + 10), cols=12)
+    dashboard = get_or_create_worksheet(spreadsheet, "Dashboard", rows=max(100, len(summaries) + 10), cols=16)
     dashboard.clear()
-    dashboard.update(google_rows_for_dashboard(summaries), value_input_option="USER_ENTERED")
+    dashboard.update(rectangularize_rows(google_rows_for_dashboard(summaries)), value_input_option="USER_ENTERED")
     dashboard.freeze(rows=1)
 
-    used_names = {"Produits", "Dashboard"}
+    used_names = {"Produits", "Dashboard", "History"}
     for summary in summaries:
         title = clean_sheet_name(summary["product"], used_names)
         worksheet = get_or_create_worksheet(spreadsheet, title, rows=max(100, len(summary["reviews"]) + 20), cols=8)
         worksheet.clear()
-        worksheet.update(google_rows_for_product(summary), value_input_option="USER_ENTERED")
+        worksheet.update(rectangularize_rows(google_rows_for_product(summary)), value_input_option="USER_ENTERED")
         worksheet.freeze(rows=1)
 
+    append_history_rows(spreadsheet, summaries)
     print("Shared Google Sheet dashboard updated.")
 
 
 def build_score_alert_body(summary: dict) -> str:
     return "\n".join([
-        f"Voxy score alert for: {summary['product']}",
-        f"Link: {summary['url']}",
+        "Voxy alert - global score below 3",
+        "",
+        f"Product: {summary['product']}",
         f"Platform: {summary['platform']}",
         f"Global score: {summary['global_score']}/5",
         f"Reviews detected: {summary['review_count']}",
-        "",
-        "Top themes:",
-        "\n".join(f"- {theme}" for theme in summary["themes"]) or "- No theme detected",
-        "",
-        "Improvement suggestions:",
-        "\n".join(f"- {suggestion}" for suggestion in summary["suggestions"]) or "- No suggestion available",
-        "",
-        "Critical points:",
-        "\n".join(f"- {point}" for point in summary["critical_points"]) or "- No critical point detected",
+        f"Low reviews <= threshold: {summary['low_review_count']}",
+        f"Critical reviews below 3: {summary['critical_review_count']}",
+        f"Top themes: {', '.join(summary['themes']) or 'not detected'}",
+        f"Status: {summary.get('status', 'OK')}",
+        f"Link: {summary['url']}",
     ])
 
 
@@ -997,8 +1346,8 @@ def main() -> int:
                 print("DRY RUN - score alert email not sent")
                 print(score_body)
             else:
-                send_email(product.emails, score_subject, score_body)
-                print(f"Score alert sent to: {', '.join(product.emails)}")
+                if try_send_email(product.emails, score_subject, score_body):
+                    print(f"Score alert sent to: {', '.join(product.emails)}")
             new_seen.add(score_alert_key(product, summary))
 
         if not low_reviews:
@@ -1011,8 +1360,8 @@ def main() -> int:
             print("DRY RUN - email not sent")
             print(body)
         else:
-            send_email(product.emails, subject, body)
-            print(f"Alert sent to: {', '.join(product.emails)}")
+            if try_send_email(product.emails, subject, body):
+                print(f"Alert sent to: {', '.join(product.emails)}")
 
     if summaries:
         build_dashboard_report(summaries, Path(args.report))
