@@ -36,6 +36,12 @@ class Product:
     platform: str
     language: str
     country: str = ""
+    owner: str = ""
+    priority: str = "Medium"
+    alert_type: str = "Both"
+    paused: bool = False
+    score_threshold: float = 3.0
+    platform_account: str = ""
 
 
 @dataclass
@@ -120,6 +126,20 @@ def normalize_text(value: str) -> str:
     return " ".join(str(value or "").replace("\xa0", " ").split())
 
 
+def truthy(value: str) -> bool:
+    return str(value or "").strip().lower() in {"oui", "yes", "true", "1", "x"}
+
+
+def optional_float(value, default: float) -> float:
+    text = str(value or "").strip().replace(",", ".")
+    if not text:
+        return default
+    try:
+        return float(text)
+    except ValueError:
+        return default
+
+
 def decode_jsonish_text(value: str) -> str:
     text = str(value or "")
     text = text.replace("\\u002F", "/")
@@ -189,7 +209,7 @@ def product_health(summary: dict | None) -> str:
     trend = summary.get("trend", "")
     if summary.get("status") == "ERROR":
         return "Technical check needed"
-    if score is not None and score < 3:
+    if score is not None and score < summary.get("score_threshold", 3.0):
         return "Bad"
     if critical > 0 or low >= 3 or trend.startswith("Declining"):
         return "Watch"
@@ -374,6 +394,12 @@ def load_products(xlsx_path: Path) -> list[Product]:
     platform_header = "platform" if "platform" in headers else "plateforme"
     language_header = "language" if "language" in headers else "langue"
     country_header = "country" if "country" in headers else "pays"
+    owner_header = "owner" if "owner" in headers else "responsable"
+    priority_header = "priority" if "priority" in headers else "priorite"
+    alert_type_header = "alert type" if "alert type" in headers else "type alerte"
+    paused_header = "paused" if "paused" in headers else "pause"
+    score_threshold_header = "score alert threshold" if "score alert threshold" in headers else "seuil score"
+    platform_account_header = "platform account" if "platform account" in headers else "compte plateforme"
 
     required = [active_header, name_header, url_header, emails_header]
     missing = [name for name in required if name not in headers]
@@ -390,12 +416,24 @@ def load_products(xlsx_path: Path) -> list[Product]:
         platform_cell = headers.get(platform_header)
         language_cell = headers.get(language_header)
         country_cell = headers.get(country_header)
+        owner_cell = headers.get(owner_header)
+        priority_cell = headers.get(priority_header)
+        alert_type_cell = headers.get(alert_type_header)
+        paused_cell = headers.get(paused_header)
+        score_threshold_cell = headers.get(score_threshold_header)
+        platform_account_cell = headers.get(platform_account_header)
         threshold = sheet.cell(row, threshold_cell).value if threshold_cell else 4
         platform = str(sheet.cell(row, platform_cell).value or "auto").strip().lower() if platform_cell else "auto"
         language = str(sheet.cell(row, language_cell).value or "en").strip() if language_cell else "en"
         country = str(sheet.cell(row, country_cell).value or "").strip() if country_cell else ""
+        owner = str(sheet.cell(row, owner_cell).value or "").strip() if owner_cell else ""
+        priority = str(sheet.cell(row, priority_cell).value or "Medium").strip() if priority_cell else "Medium"
+        alert_type = str(sheet.cell(row, alert_type_cell).value or "Both").strip() if alert_type_cell else "Both"
+        paused = truthy(str(sheet.cell(row, paused_cell).value or "")) if paused_cell else False
+        score_threshold = optional_float(sheet.cell(row, score_threshold_cell).value if score_threshold_cell else "", 3.0)
+        platform_account = str(sheet.cell(row, platform_account_cell).value or "").strip() if platform_account_cell else ""
 
-        if active not in {"oui", "yes", "true", "1", "x"}:
+        if active not in {"oui", "yes", "true", "1", "x"} or paused:
             continue
         if not name and not url:
             continue
@@ -403,7 +441,21 @@ def load_products(xlsx_path: Path) -> list[Product]:
             print(f"Row {row} skipped: product name, URL, or alert emails are missing.")
             continue
 
-        products.append(Product(name=name, url=url, emails=emails, threshold=float(threshold or 4), platform=platform, language=language, country=country))
+        products.append(Product(
+            name=name,
+            url=url,
+            emails=emails,
+            threshold=optional_float(threshold, 4.0),
+            platform=platform,
+            language=language,
+            country=country,
+            owner=owner,
+            priority=priority,
+            alert_type=alert_type,
+            paused=paused,
+            score_threshold=score_threshold,
+            platform_account=platform_account,
+        ))
     return products
 
 
@@ -424,6 +476,12 @@ def products_from_rows(rows: list[list]) -> list[Product]:
     platform_col = headers.get("platform", headers.get("plateforme"))
     language_col = headers.get("language", headers.get("langue"))
     country_col = headers.get("country", headers.get("pays"))
+    owner_col = headers.get("owner", headers.get("responsable"))
+    priority_col = headers.get("priority", headers.get("priorite"))
+    alert_type_col = headers.get("alert type", headers.get("type alerte"))
+    paused_col = headers.get("paused", headers.get("pause"))
+    score_threshold_col = headers.get("score alert threshold", headers.get("seuil score"))
+    platform_account_col = headers.get("platform account", headers.get("compte plateforme"))
 
     if None in {active_col, name_col, url_col, emails_col}:
         raise ValueError("Missing required columns in Google Sheet. Expected: Active, Product name, URL to monitor, Alert emails.")
@@ -441,8 +499,14 @@ def products_from_rows(rows: list[list]) -> list[Product]:
         platform = str(cell(platform_col, "auto")).strip().lower()
         language = str(cell(language_col, "en")).strip()
         country = str(cell(country_col, "")).strip()
+        owner = str(cell(owner_col, "")).strip()
+        priority = str(cell(priority_col, "Medium")).strip() or "Medium"
+        alert_type = str(cell(alert_type_col, "Both")).strip() or "Both"
+        paused = truthy(cell(paused_col, ""))
+        score_threshold = optional_float(cell(score_threshold_col, ""), 3.0)
+        platform_account = str(cell(platform_account_col, "")).strip()
 
-        if active not in {"oui", "yes", "true", "1", "x"}:
+        if active not in {"oui", "yes", "true", "1", "x"} or paused:
             continue
         if not name and not url:
             continue
@@ -450,7 +514,21 @@ def products_from_rows(rows: list[list]) -> list[Product]:
             print(f"Row {row_number} skipped: product name, URL, or alert emails are missing.")
             continue
 
-        products.append(Product(name=name, url=url, emails=emails, threshold=float(threshold or 4), platform=platform, language=language, country=country))
+        products.append(Product(
+            name=name,
+            url=url,
+            emails=emails,
+            threshold=optional_float(threshold, 4.0),
+            platform=platform,
+            language=language,
+            country=country,
+            owner=owner,
+            priority=priority,
+            alert_type=alert_type,
+            paused=paused,
+            score_threshold=score_threshold,
+            platform_account=platform_account,
+        ))
     return products
 
 
@@ -909,13 +987,18 @@ def summarize_reviews(product: Product, reviews: list[Review]) -> dict:
         "url": product.url,
         "platform": platform,
         "country": product.country,
+        "owner": product.owner,
+        "priority": product.priority,
+        "alert_type": product.alert_type,
+        "score_threshold": product.score_threshold,
+        "platform_account": product.platform_account,
         "review_count": review_count,
         "global_score": global_score,
         "trend": "No history",
         "trend_delta": "",
         "low_review_count": len(low_reviews),
         "critical_review_count": len(critical_reviews),
-        "alert": bool(global_score is not None and global_score < 3),
+        "alert": bool(global_score is not None and global_score < product.score_threshold),
         "themes": ranked_themes[:6],
         "suggestions": suggestions,
         "critical_points": critical_points,
@@ -933,6 +1016,11 @@ def summarize_error(product: Product, error: Exception) -> dict:
         "url": product.url,
         "platform": detect_platform(product),
         "country": product.country,
+        "owner": product.owner,
+        "priority": product.priority,
+        "alert_type": product.alert_type,
+        "score_threshold": product.score_threshold,
+        "platform_account": product.platform_account,
         "review_count": 0,
         "global_score": None,
         "trend": "No score",
@@ -1083,6 +1171,8 @@ def google_rows_for_dashboard(summaries: list[dict]) -> list[list]:
         [
         "Product",
         "Country",
+        "Owner",
+        "Priority",
         "Status",
         "Trend",
         "Global score",
@@ -1097,6 +1187,8 @@ def google_rows_for_dashboard(summaries: list[dict]) -> list[list]:
         rows.append([
             item["product"],
             item.get("country", ""),
+            item.get("owner", ""),
+            item.get("priority", ""),
             product_health_with_icon(item),
             trend_with_arrow(item),
             item["global_score"] if item["global_score"] is not None else "N/A",
@@ -1267,7 +1359,7 @@ def update_google_sheet_dashboard(sheet_url: str, summaries: list[dict]) -> None
     spreadsheet = client.open_by_url(sheet_url)
     annotate_trends_from_history(spreadsheet, summaries)
 
-    dashboard = get_or_create_worksheet(spreadsheet, "Dashboard", rows=max(100, len(summaries) + 10), cols=9)
+    dashboard = get_or_create_worksheet(spreadsheet, "Dashboard", rows=max(100, len(summaries) + 10), cols=11)
     dashboard.clear()
     dashboard.update(rectangularize_rows(google_rows_for_dashboard(summaries)), value_input_option="USER_ENTERED")
     dashboard.freeze(rows=1)
@@ -1291,6 +1383,49 @@ def build_score_alert_body(summary: dict) -> str:
         f"Main issue: {', '.join(summary['themes'][:2]) or 'not detected'}",
         f"Link: {summary['url']}",
     ])
+
+
+def alert_type_allows(product: Product, alert_kind: str) -> bool:
+    value = (product.alert_type or "Both").strip().lower()
+    if value in {"both", "all", "tout"}:
+        return True
+    if alert_kind == "low_review":
+        return value in {"low reviews", "low review", "review", "reviews", "avis", "mauvais avis"}
+    if alert_kind == "score":
+        return value in {"score", "score drop", "global score", "note"}
+    return False
+
+
+def build_summary_email_body(recipient: str, entries: list[dict], timezone_name: str) -> str:
+    now = datetime.now(ZoneInfo(timezone_name)).strftime("%Y-%m-%d %H:%M")
+    lines = [
+        "Voxy alert summary",
+        "",
+        f"Recipient: {recipient}",
+        f"Check time: {now} ({timezone_name})",
+        f"Products in alert: {len(entries)}",
+        "",
+    ]
+    for index, entry in enumerate(entries, start=1):
+        summary = entry["summary"]
+        reasons = ", ".join(entry["reasons"])
+        lines.extend([
+            f"{index}. {summary['product']}",
+            f"Country: {summary.get('country') or 'N/A'}",
+            f"Owner: {summary.get('owner') or 'N/A'}",
+            f"Priority: {summary.get('priority') or 'Medium'}",
+            f"Status: {product_health_with_icon(summary)}",
+            f"Trend: {trend_with_arrow(summary)}",
+            f"Score: {summary['global_score'] if summary['global_score'] is not None else 'N/A'}/5",
+            f"Reviews checked: {summary['review_count']}",
+            f"Low reviews: {summary['low_review_count']}",
+            f"Critical reviews < 3: {summary['critical_review_count']}",
+            f"Reason: {reasons}",
+            f"Action: {(summary.get('suggestions') or ['Review product feedback'])[0]}",
+            f"Link: {summary['url']}",
+            "",
+        ])
+    return "\n".join(lines).strip()
 
 
 def seen_key(product: Product, review: Review) -> str:
@@ -1344,6 +1479,7 @@ def main() -> int:
         return 0
 
     summaries: list[dict] = []
+    alert_entries_by_recipient: dict[str, list[dict]] = {}
     for product in products:
         print(f"Checking: {product.name}")
         try:
@@ -1373,29 +1509,36 @@ def main() -> int:
             print(f"Baseline: {len(reviews)} reviews saved, no email sent.")
             continue
 
-        if summary["alert"] and score_alert_key(product, summary) not in seen:
-            score_body = build_score_alert_body(summary)
-            score_subject = f"{subject_prefix} {product.name}: global score below 3"
-            if args.dry_run:
-                print("DRY RUN - score alert email not sent")
-                print(score_body)
-            else:
-                if try_send_email(product.emails, score_subject, score_body):
-                    print(f"Score alert sent to: {', '.join(product.emails)}")
+        alert_reasons = []
+        if summary["alert"] and score_alert_key(product, summary) not in seen and alert_type_allows(product, "score"):
+            alert_reasons.append(f"score below {product.score_threshold}")
             new_seen.add(score_alert_key(product, summary))
 
         if not low_reviews:
             print(f"OK: no new reviews rated {product.threshold} stars or less.")
-            continue
-
-        body = build_alert_body(product, low_reviews, summary)
-        subject = f"{subject_prefix} {product.name}: {len(low_reviews)} avis <= {product.threshold}"
-        if args.dry_run:
-            print("DRY RUN - email not sent")
-            print(body)
         else:
-            if try_send_email(product.emails, subject, body):
-                print(f"Alert sent to: {', '.join(product.emails)}")
+            if alert_type_allows(product, "low_review"):
+                alert_reasons.append(f"{len(low_reviews)} new review(s) <= {product.threshold}/5")
+
+        if alert_reasons:
+            for recipient in product.emails:
+                alert_entries_by_recipient.setdefault(recipient, []).append({
+                    "summary": summary,
+                    "reasons": alert_reasons,
+                })
+
+    if alert_entries_by_recipient and not args.baseline:
+        for recipient, entries in sorted(alert_entries_by_recipient.items()):
+            body = build_summary_email_body(recipient, entries, args.timezone)
+            subject = f"{subject_prefix} Voxy summary: {len(entries)} product(s) in alert"
+            if args.dry_run:
+                print("DRY RUN - summary email not sent")
+                print(body)
+            else:
+                if try_send_email([recipient], subject, body):
+                    print(f"Summary alert sent to: {recipient}")
+    elif not args.baseline:
+        print("OK: no product alerts to email.")
 
     if summaries:
         build_dashboard_report(summaries, Path(args.report))
