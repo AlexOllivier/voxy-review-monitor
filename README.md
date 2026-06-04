@@ -1,6 +1,6 @@
 # Voxy Cloud - GitHub Actions Setup
 
-Voxy Cloud runs from GitHub once per day, reads the shared Google Sheet, checks review pages with Python + Playwright, sends email alerts, and generates a dashboard workbook.
+Voxy Cloud runs from GitHub once per week, reads the shared Google Sheet, checks review pages with Python + Playwright, sends clear email alerts, and updates a simple dashboard workbook.
 
 Your PC does not need to be on.
 
@@ -27,10 +27,17 @@ The Google Sheet must keep the `Produits` sheet with these columns:
 
 - `Active`
 - `Product name`
+- `Country`
+- `Owner`
+- `Priority`
+- `Paused`
 - `URL to monitor`
 - `Alert emails`
 - `Star threshold`
+- `Score alert threshold`
+- `Alert type`
 - `Platform`
+- `Platform account`
 - `Notes`
 
 Share the sheet so Voxy can download it:
@@ -69,7 +76,7 @@ Optional:
 
 In GitHub:
 
-`Actions` -> `Voxy Daily Review Analysis` -> `Run workflow`
+`Actions` -> `Voxy Weekly Review Analysis` -> `Run workflow`
 
 The first run can be launched in baseline mode by setting:
 
@@ -77,11 +84,11 @@ The first run can be launched in baseline mode by setting:
 
 That saves existing reviews without sending alerts.
 
-## 6. Daily schedule
+## 6. Weekly schedule
 
-The workflow is scheduled at `07:00` and `08:00` UTC.
+The workflow is scheduled every Monday at `07:00` and `08:00` UTC.
 
-Voxy only runs when the current time in `Europe/Paris` is `09:00`.
+Voxy only runs when the current time in `Europe/Paris` is Monday `09:00`.
 
 This handles winter/summer time more safely:
 
@@ -90,7 +97,7 @@ This handles winter/summer time more safely:
 
 ## 7. Dashboard
 
-After each run, Voxy updates the `Dashboard` sheet and one tab per product directly inside the shared Google Sheet when `GOOGLE_SERVICE_ACCOUNT_JSON` is configured.
+After each run, Voxy updates the simple `Dashboard` sheet directly inside the shared Google Sheet when `GOOGLE_SERVICE_ACCOUNT_JSON` is configured.
 
 GitHub also stores a downloadable backup:
 
