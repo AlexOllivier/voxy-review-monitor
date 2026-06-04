@@ -908,6 +908,17 @@ def try_send_email(recipients: list[str], subject: str, body: str) -> bool:
         return False
 
 
+def english_subject_prefix() -> str:
+    configured = os.environ.get("ALERT_SUBJECT_PREFIX", "").strip()
+    if not configured:
+        return "[Voxy alert]"
+
+    lowered = configured.lower()
+    if any(word in lowered for word in ["alerte", "avis"]):
+        return "[Voxy alert]"
+    return configured
+
+
 def translate_to_english(text: str) -> str:
     if not text or os.environ.get("TRANSLATE_REVIEWS_TO_ENGLISH", "false").lower() not in {"true", "1", "yes", "oui"}:
         return ""
@@ -1414,9 +1425,11 @@ def build_summary_email_body(recipient: str, entries: list[dict], timezone_name:
             f"Country: {summary.get('country') or 'N/A'}",
             f"Owner: {summary.get('owner') or 'N/A'}",
             f"Priority: {summary.get('priority') or 'Medium'}",
+            f"Platform: {summary.get('platform') or 'N/A'}",
             f"Status: {product_health_with_icon(summary)}",
             f"Trend: {trend_with_arrow(summary)}",
             f"Score: {summary['global_score'] if summary['global_score'] is not None else 'N/A'}/5",
+            f"Score alert threshold: {summary.get('score_threshold', 3.0)}/5",
             f"Reviews checked: {summary['review_count']}",
             f"Low reviews: {summary['low_review_count']}",
             f"Critical reviews < 3: {summary['critical_review_count']}",
@@ -1437,6 +1450,19 @@ def score_alert_key(product: Product, summary: dict) -> str:
     product_key = hashlib.sha256(product.url.encode("utf-8", errors="ignore")).hexdigest()[:16]
     score = summary["global_score"] if summary["global_score"] is not None else "na"
     return f"{product_key}:score-alert:{score}:{summary['review_count']}"
+
+
+def annotate_email_trends(sheet_url: str, summaries: list[dict]) -> None:
+    if not sheet_url or not summaries:
+        return
+    client = google_client_from_env()
+    if client is None:
+        return
+    try:
+        spreadsheet = client.open_by_url(sheet_url)
+        annotate_trends_from_history(spreadsheet, summaries)
+    except Exception as exc:
+        print(f"Trend check skipped before email: {exc}")
 
 
 def main() -> int:
@@ -1466,7 +1492,7 @@ def main() -> int:
         products = load_products(input_xlsx)
     seen = load_seen(Path(args.state))
     new_seen = set(seen)
-    subject_prefix = os.environ.get("ALERT_SUBJECT_PREFIX", "[Alerte avis]")
+    subject_prefix = english_subject_prefix()
     local_now = datetime.now(ZoneInfo(args.timezone))
     local_today = local_now.date()
 
@@ -1528,6 +1554,7 @@ def main() -> int:
                 })
 
     if alert_entries_by_recipient and not args.baseline:
+        annotate_email_trends(sheet_url, summaries)
         for recipient, entries in sorted(alert_entries_by_recipient.items()):
             body = build_summary_email_body(recipient, entries, args.timezone)
             subject = f"{subject_prefix} Voxy summary: {len(entries)} product(s) in alert"
