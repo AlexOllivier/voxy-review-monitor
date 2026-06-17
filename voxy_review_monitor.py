@@ -1410,11 +1410,11 @@ def alert_type_allows(product: Product, alert_kind: str) -> bool:
 def build_summary_email_body(recipient: str, entries: list[dict], timezone_name: str) -> str:
     now = datetime.now(ZoneInfo(timezone_name)).strftime("%Y-%m-%d %H:%M")
     lines = [
-        "Voxy alert summary",
+        "Voxy weekly review summary",
         "",
         f"Recipient: {recipient}",
         f"Check time: {now} ({timezone_name})",
-        f"Products in alert: {len(entries)}",
+        f"Products checked in this email: {len(entries)}",
         "",
     ]
     for index, entry in enumerate(entries, start=1):
@@ -1505,14 +1505,21 @@ def main() -> int:
         return 0
 
     summaries: list[dict] = []
-    alert_entries_by_recipient: dict[str, list[dict]] = {}
+    weekly_entries_by_recipient: dict[str, list[dict]] = {}
     for product in products:
         print(f"Checking: {product.name}")
         try:
             reviews = fetch_reviews(product)
         except Exception as exc:
             print(f"Error while checking {product.name}: {exc}")
-            summaries.append(summarize_error(product, exc))
+            summary = summarize_error(product, exc)
+            summaries.append(summary)
+            if not args.baseline:
+                for recipient in product.emails:
+                    weekly_entries_by_recipient.setdefault(recipient, []).append({
+                        "summary": summary,
+                        "reasons": ["technical check needed"],
+                    })
             continue
 
         for review in reviews:
@@ -1548,24 +1555,34 @@ def main() -> int:
 
         if alert_reasons:
             for recipient in product.emails:
-                alert_entries_by_recipient.setdefault(recipient, []).append({
+                weekly_entries_by_recipient.setdefault(recipient, []).append({
                     "summary": summary,
                     "reasons": alert_reasons,
                 })
+        elif not args.baseline:
+            for recipient in product.emails:
+                weekly_entries_by_recipient.setdefault(recipient, []).append({
+                    "summary": summary,
+                    "reasons": ["weekly status: no new alert"],
+                })
 
-    if alert_entries_by_recipient and not args.baseline:
+    if weekly_entries_by_recipient and not args.baseline:
         annotate_email_trends(sheet_url, summaries)
-        for recipient, entries in sorted(alert_entries_by_recipient.items()):
+        for recipient, entries in sorted(weekly_entries_by_recipient.items()):
             body = build_summary_email_body(recipient, entries, args.timezone)
-            subject = f"{subject_prefix} Voxy summary: {len(entries)} product(s) in alert"
+            alert_count = sum(
+                1 for entry in entries
+                if "weekly status: no new alert" not in entry["reasons"]
+            )
+            subject = f"{subject_prefix} Voxy weekly summary: {len(entries)} product(s) checked, {alert_count} in alert"
             if args.dry_run:
-                print("DRY RUN - summary email not sent")
+                print("DRY RUN - weekly summary email not sent")
                 print(body)
             else:
                 if try_send_email([recipient], subject, body):
-                    print(f"Summary alert sent to: {recipient}")
+                    print(f"Weekly summary sent to: {recipient}")
     elif not args.baseline:
-        print("OK: no product alerts to email.")
+        print("OK: no weekly summary recipients found.")
 
     if summaries:
         build_dashboard_report(summaries, Path(args.report))

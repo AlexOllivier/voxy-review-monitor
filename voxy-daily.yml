@@ -1,4 +1,4 @@
-name: Voxy Daily Review Analysis
+name: Voxy Weekly Review Analysis
 
 on:
   workflow_dispatch:
@@ -20,8 +20,8 @@ on:
           - "false"
           - "true"
   schedule:
-    - cron: "0 7 * * *"
-    - cron: "0 8 * * *"
+    - cron: "0 7 * * 1"
+    - cron: "0 8 * * 1"
 
 jobs:
   voxy:
@@ -75,10 +75,12 @@ jobs:
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
             FLAGS="$FLAGS --dry-run"
           fi
+          if [ -n "$GOOGLE_SERVICE_ACCOUNT_JSON" ]; then
+            FLAGS="$FLAGS --update-google-sheet-dashboard"
+          fi
           python voxy_review_monitor.py \
             --report voxy_dashboard_report.xlsx \
             --timezone Europe/Paris \
-            --update-google-sheet-dashboard \
             $FLAGS
 
       - name: Upload dashboard

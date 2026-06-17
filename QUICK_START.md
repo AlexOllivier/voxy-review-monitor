@@ -1,75 +1,41 @@
-# Voxy Cloud - Step-by-step Launch
+# Voxy Weekly Email - Quick Start
 
-## Step 1 - Keep your Google Sheet
+## 1. Upload the files
 
-Your Google Sheet is already the central file.
-
-Your colleagues only edit the `Produits` sheet.
-
-Required columns:
-
-- `Active`
-- `Product name`
-- `URL to monitor`
-- `Alert emails`
-- `Star threshold`
-- `Platform`
-- `Notes`
-
-## Step 2 - Make the Google Sheet readable
-
-In Google Sheets:
-
-1. Click `Share`.
-2. Under general access, choose `Anyone with the link`.
-3. Set the role to `Viewer`.
-4. Copy the Google Sheet link.
-
-Your colleagues can still have `Editor` access individually.
-
-## Step 3 - Create a GitHub account
-
-Go to:
-
-https://github.com
-
-Create an account or log in.
-
-## Step 4 - Create a repository
-
-Click `New repository`.
-
-Use this name:
-
-`voxy-review-monitor`
-
-Recommended:
-
-- Visibility: `Private`
-- Do not worry if you leave README unchecked.
-
-Click `Create repository`.
-
-## Step 5 - Upload the Voxy files
-
-Upload all files from the local folder:
-
-`Voxy GitHub Actions`
-
-The GitHub repository must contain:
+Upload everything in this folder to the root of your GitHub repository:
 
 - `voxy_review_monitor.py`
 - `requirements.txt`
 - `README.md`
+- `QUICK_START.md`
 - `.github/workflows/voxy-daily.yml`
 
-Important: the `.github/workflows/voxy-daily.yml` file must be inside exactly this folder path:
+Keep `.github/workflows/voxy-daily.yml` in that exact folder path.
 
-`.github/workflows/`
+## 2. Check the Google Sheet
 
-## Step 6 - Add GitHub secrets
+The shared Google Sheet must have a `Produits` tab with these columns:
 
-In the GitHub repository:
+- `Active`
+- `Product name`
+- `Country`
+- `Owner`
+- `Priority`
+- `Paused`
+- `URL to monitor`
+- `Alert emails`
+- `Star threshold`
+- `Score alert threshold`
+- `Alert type`
+- `Platform`
+- `Platform account`
+- `Notes`
+
+The `Alert emails` column controls who receives the weekly summary.
+
+## 3. Add GitHub secrets
+
+In GitHub:
 
 `Settings` -> `Secrets and variables` -> `Actions` -> `New repository secret`
 
@@ -83,9 +49,8 @@ Add:
 - `SMTP_FROM`
 - `SMTP_USE_TLS`
 - `ALERT_SUBJECT_PREFIX`
-- `GOOGLE_SERVICE_ACCOUNT_JSON`
 
-Recommended values:
+Recommended SMTP values:
 
 ```text
 SMTP_HOST=smtp.gmail.com
@@ -94,83 +59,43 @@ SMTP_USE_TLS=true
 ALERT_SUBJECT_PREFIX=[Voxy - Review alert]
 ```
 
-For Gmail or Google Workspace, `SMTP_PASSWORD` is usually an app password, not your normal password.
+For Gmail or Google Workspace, `SMTP_PASSWORD` is usually an app password, not the normal mailbox password.
 
-## Step 6A - Create the Google permission for dashboard updates
+Optional dashboard update:
 
-To let GitHub update the Dashboard tabs inside your Google Sheet:
+- `GOOGLE_SERVICE_ACCOUNT_JSON`
 
-1. Go to Google Cloud Console.
-2. Create a project named `Voxy`.
-3. Enable the `Google Sheets API`.
-4. Create a `Service account`.
-5. Create a JSON key for that service account.
-6. Copy the full JSON content.
-7. In GitHub secrets, create `GOOGLE_SERVICE_ACCOUNT_JSON` and paste the full JSON.
-8. In the JSON, find the service account email, usually ending with:
-   `iam.gserviceaccount.com`
-9. Share your Google Sheet with that service account email as `Editor`.
+If this optional secret is missing, Voxy still sends the weekly email and uploads the dashboard as a GitHub artifact.
 
-Without this secret, Voxy can read the public Google Sheet but cannot write the dashboard back into it.
-
-## Step 7 - Run the first baseline
+## 4. Test without sending
 
 In GitHub:
 
-1. Go to `Actions`.
-2. Click `Voxy Daily Review Analysis`.
+1. Open `Actions`.
+2. Click `Voxy Weekly Review Analysis`.
 3. Click `Run workflow`.
-4. Set `baseline` to `true`.
-5. Click `Run workflow`.
+4. Set `baseline` to `false`.
+5. Set `dry_run` to `true`.
+6. Click `Run workflow`.
 
-This saves existing reviews without sending alerts.
+This prints the weekly email content in the logs but does not send it.
 
-## Step 8 - Run a dry test
-
-Run the workflow again with:
-
-- `baseline`: `false`
-- `dry_run`: `true`
-
-This tests Voxy without sending emails.
-
-## Step 9 - Run for real
+## 5. Send the real weekly email
 
 Run the workflow again with:
 
 - `baseline`: `false`
 - `dry_run`: `false`
 
-Voxy can now send emails if it finds alerts.
+This sends one weekly summary email to each recipient in the `Alert emails` column.
 
-## Step 10 - Automatic daily run
+## 6. Automatic weekly run
 
-The workflow is already scheduled.
+The workflow is already scheduled for every Monday at 09:00 Paris time.
 
-It checks at 07:00 UTC and 08:00 UTC, but Voxy only runs when Paris time is 09:00.
+It checks both UTC possibilities:
 
-This handles summer and winter time.
+- `07:00 UTC`
+- `08:00 UTC`
 
-## Step 11 - Get the dashboard
-
-After each run, Voxy updates the `Dashboard` tab and one tab per product in the shared Google Sheet.
-
-GitHub also keeps a backup:
-
-1. Open the workflow run.
-2. Scroll to `Artifacts`.
-3. Download `voxy-dashboard-report`.
-
-Inside is:
-
-`voxy_dashboard_report.xlsx`
-
-## Step 12 - Stop the old PC version
-
-If you installed the Windows task before, remove it:
-
-```powershell
-Unregister-ScheduledTask -TaskName "Voxy Daily Review Analysis" -Confirm:$false
-```
-
-After GitHub works, your PC does not need to stay on.
+The script only continues when the local Paris hour is actually 09:00, so it works across summer and winter time.

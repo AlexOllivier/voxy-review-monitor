@@ -1,57 +1,43 @@
-# Voxy Cloud - GitHub Actions Setup
+# Voxy Cloud - Weekly GitHub Actions Setup
 
-Voxy Cloud runs from GitHub once per week, reads the shared Google Sheet, checks review pages with Python + Playwright, sends clear email alerts, and updates a simple dashboard workbook.
+Voxy runs from GitHub once per week, reads the shared Google Sheet, checks review pages, sends one weekly email summary to the addresses listed in `Alert emails`, and creates a dashboard artifact.
 
-Your PC does not need to be on.
+Your PC does not need to stay on.
 
-## 1. Create the GitHub repository
+## Files to upload
 
-Create a new private repository named:
-
-`voxy-review-monitor`
-
-## 2. Upload the files
-
-Upload the contents of the `Voxy GitHub Actions` folder to the root of the repository.
-
-The repository should contain:
+Upload these files to the root of the GitHub repository:
 
 - `voxy_review_monitor.py`
 - `requirements.txt`
-- `.github/workflows/voxy-daily.yml`
 - `README.md`
+- `QUICK_START.md`
+- `.github/workflows/voxy-daily.yml`
 
-## 3. Configure the Google Sheet
+The workflow file must stay in exactly this path:
 
-The Google Sheet must keep the `Produits` sheet with these columns:
+`.github/workflows/voxy-daily.yml`
 
-- `Active`
-- `Product name`
-- `Country`
-- `Owner`
-- `Priority`
-- `Paused`
-- `URL to monitor`
-- `Alert emails`
-- `Star threshold`
-- `Score alert threshold`
-- `Alert type`
-- `Platform`
-- `Platform account`
-- `Notes`
+## Weekly email behavior
 
-Share the sheet so Voxy can download it:
+The workflow is scheduled every Monday.
 
-- simplest: `Anyone with the link can view`
-- colleagues who add URLs: `Editor`
+It checks at `07:00` and `08:00` UTC, but the script only runs when Paris time is `09:00`.
 
-## 4. Add GitHub secrets
+This handles summer and winter time:
 
-In GitHub:
+- summer: Monday 09:00 Paris = 07:00 UTC
+- winter: Monday 09:00 Paris = 08:00 UTC
+
+Each normal weekly run sends one summary email per recipient, even when there is no new alert. Products with issues are still marked in the email.
+
+## Required GitHub secrets
+
+In the GitHub repository, open:
 
 `Settings` -> `Secrets and variables` -> `Actions` -> `New repository secret`
 
-Add these secrets:
+Add:
 
 | Secret | Value |
 |---|---|
@@ -70,43 +56,24 @@ Optional:
 |---|---|
 | `TRANSLATE_REVIEWS_TO_ENGLISH` | `true` or `false` |
 | `DEEPL_API_KEY` | DeepL key if translation is enabled |
-| `GOOGLE_SERVICE_ACCOUNT_JSON` | Service account JSON if you want Voxy to update dashboard tabs inside the shared Google Sheet |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | Service account JSON if Voxy should update dashboard tabs inside the shared Google Sheet |
 
-## 5. Test manually
+If `GOOGLE_SERVICE_ACCOUNT_JSON` is not configured, the workflow still sends the weekly email and uploads the Excel dashboard artifact.
+
+## Manual test
 
 In GitHub:
 
 `Actions` -> `Voxy Weekly Review Analysis` -> `Run workflow`
 
-The first run can be launched in baseline mode by setting:
+First test without sending:
 
-`baseline = true`
+- `baseline`: `false`
+- `dry_run`: `true`
 
-That saves existing reviews without sending alerts.
+Then run for real:
 
-## 6. Weekly schedule
+- `baseline`: `false`
+- `dry_run`: `false`
 
-The workflow is scheduled every Monday at `07:00` and `08:00` UTC.
-
-Voxy only runs when the current time in `Europe/Paris` is Monday `09:00`.
-
-This handles winter/summer time more safely:
-
-- winter: 09:00 Paris = 08:00 UTC
-- summer: 09:00 Paris = 07:00 UTC
-
-## 7. Dashboard
-
-After each run, Voxy updates the simple `Dashboard` sheet directly inside the shared Google Sheet when `GOOGLE_SERVICE_ACCOUNT_JSON` is configured.
-
-GitHub also stores a downloadable backup:
-
-`voxy_dashboard_report.xlsx`
-
-as a workflow artifact.
-
-Download it from the workflow run page.
-
-## Important limit
-
-GitHub Actions + Playwright is stronger than Google Apps Script because it runs a browser. Still, some platforms may block automation or change their page structure. Voxy will be more robust than Apps Script, but not guaranteed on every platform.
+Use `baseline=true` only if you want to save existing reviews without sending any email.
