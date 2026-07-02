@@ -91,11 +91,8 @@ This sends one weekly summary email to each recipient in the `Alert emails` colu
 
 ## 6. Automatic weekly run
 
-The workflow is already scheduled for every Monday at 09:00 Paris time.
+The workflow is already scheduled for every Monday at `07:00 UTC`.
 
-It checks both UTC possibilities:
+In Paris, this is usually `09:00` in summer and `08:00` in winter.
 
-- `07:00 UTC`
-- `08:00 UTC`
-
-The script only continues when the local Paris hour is actually 09:00, so it works across summer and winter time.
+GitHub can sometimes start scheduled jobs late. Voxy now sends the weekly email whenever that Monday job actually starts, so a delay on GitHub's side will not block the email.
