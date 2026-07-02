@@ -301,6 +301,11 @@ def build_summary_email_body(recipient, entries, timezone_name):
         f"Products in alert: {len(entries)}",
         "",
     ]
+    if not entries:
+        lines.extend([
+            "No new bad reviews or score alerts detected.",
+            "",
+        ])
     for index, entry in enumerate(entries, start=1):
         summary = entry["summary"]
         lines.extend([
@@ -425,7 +430,20 @@ def main():
             elif base.try_send_email([recipient], subject, body):
                 print(f"Bad review alert sent to: {recipient}")
     elif not args.baseline:
-        print("OK: no products with new bad reviews or score alerts to email.")
+        manual_run = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+        recipients = sorted({email for product in products for email in product.emails})
+        if manual_run and recipients:
+            print("OK: no products with new bad reviews or score alerts. Sending manual confirmation email.")
+            for recipient in recipients:
+                body = build_summary_email_body(recipient, [], args.timezone)
+                subject = "Products Reviews Update"
+                if args.dry_run:
+                    print("DRY RUN - no-alert confirmation email not sent")
+                    print(body)
+                elif base.try_send_email([recipient], subject, body):
+                    print(f"No-alert confirmation sent to: {recipient}")
+        else:
+            print("OK: no products with new bad reviews or score alerts to email.")
 
     if summaries:
         base.build_dashboard_report(summaries, Path(args.report))

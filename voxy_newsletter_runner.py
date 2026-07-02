@@ -83,6 +83,16 @@ def newsletter_html(plain_body: str) -> str:
             "</td></tr>"
             "</table>"
         )
+    if not card_html:
+        card_html.append(
+            "<table role='presentation' width='100%' cellpadding='0' cellspacing='0' "
+            "style='background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;margin-top:18px;'>"
+            "<tr><td style='padding:28px;text-align:center;'>"
+            "<div style='color:#101828;font-size:20px;font-weight:600;margin-bottom:8px;'>No products need attention</div>"
+            "<div style='color:#667085;font-size:14px;line-height:1.5;'>No new bad reviews or score alerts were detected in this run.</div>"
+            "</td></tr>"
+            "</table>"
+        )
 
     return f"""<!doctype html>
 <html>
