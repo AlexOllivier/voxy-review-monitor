@@ -17,7 +17,9 @@ def line_to_html(line: str) -> str:
     if ": " not in line:
         return f"<div class='line'>{escaped}</div>"
     label, value = escaped.split(": ", 1)
-    class_name = "row action" if label == "Action" else "row"
+    class_name = "row row-left" if label in {"Action", "Link"} else "row"
+    if label == "Link":
+        value = f"<a href='{value}'>{value}</a>"
     return f"<div class='{class_name}'><span>{label}</span><strong>{value}</strong></div>"
 
 
@@ -56,23 +58,28 @@ def newsletter_html(plain_body: str) -> str:
     body {{ margin:0; padding:0; background:#f3f5f8; color:#14213d; font-family:Arial, Helvetica, sans-serif; }}
     .wrap {{ max-width:760px; margin:0 auto; padding:28px 18px; }}
     .hero {{ background:#ffffff; border:1px solid #dde3ea; border-radius:16px; padding:28px 24px; text-align:center; }}
-    .brand-row {{ display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; }}
+    .brand-row {{ display:block; text-align:center; }}
     .brand {{ display:block; text-align:center; }}
     .logo {{ color:#22316f; font-size:30px; font-weight:700; letter-spacing:0; line-height:1; }}
     .hero h1 {{ margin:20px 0 10px; font-size:30px; color:#101828; letter-spacing:0; font-weight:600; }}
-    .sub {{ color:#667085; font-size:14px; line-height:1.5; margin:0 auto; max-width:560px; }}
-    .pill {{ display:inline-block; background:#e7fff7; color:#007f63; border:1px solid #b8f3de; border-radius:999px; padding:8px 16px; font-weight:500; }}
+    .sub {{ color:#667085; font-size:14px; line-height:1.5; margin:0 auto; white-space:nowrap; }}
+    .pill {{ display:inline-block; background:#e7fff7; color:#007f63; border:1px solid #b8f3de; border-radius:999px; padding:8px 16px; font-weight:500; margin-top:12px; }}
     .card {{ background:white; border:1px solid #e5e7eb; border-radius:12px; margin-top:18px; padding:22px; box-shadow:0 4px 14px rgba(16,24,40,.07); }}
     .card h2 {{ margin:0 0 16px; font-size:20px; color:#101828; text-align:center; font-weight:600; }}
     .row {{ display:flex; gap:14px; justify-content:space-between; align-items:center; border-top:1px solid #edf0f3; padding:10px 0; text-align:left; }}
     .row span {{ color:#667085; min-width:170px; font-size:13px; font-weight:500; text-transform:uppercase; }}
     .row strong {{ color:#101828; font-size:14px; text-align:right; font-weight:400; }}
+    .row-left {{ display:block; text-align:left; }}
+    .row-left span {{ display:block; min-width:0; margin-bottom:6px; }}
+    .row-left strong {{ display:block; text-align:left; line-height:1.45; word-break:break-word; }}
+    .row-left a {{ color:#006fd6; text-decoration:none; word-break:break-word; }}
     .action {{ background:#fff8db; border:1px solid #f4d35e; border-radius:10px; padding:12px; margin-top:10px; }}
     .line {{ color:#475467; margin:8px 0; }}
     .footer {{ text-align:center; color:#667085; font-size:12px; margin-top:22px; }}
     @media (max-width:600px) {{
       .row {{ display:block; }}
       .row strong {{ display:block; text-align:left; margin-top:4px; }}
+      .sub {{ white-space:normal; }}
     }}
   </style>
 </head>
@@ -83,7 +90,7 @@ def newsletter_html(plain_body: str) -> str:
         <div class="brand">
           <div class="logo">VoxCity</div>
         </div>
-        <div class="pill">{product_count} product(s) need attention</div>
+        <div class="pill">{product_count} product(s) remaining</div>
       </div>
       <h1>{title}</h1>
       <p class="sub">Weekly product review monitoring focused on platform scores, low reviews, and concrete actions.</p>
