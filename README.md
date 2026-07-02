@@ -20,14 +20,14 @@ The workflow file must stay in exactly this path:
 
 ## Weekly email behavior
 
-The workflow is scheduled every Monday.
+The workflow is scheduled once every Monday at `07:00 UTC`.
 
-It checks at `07:00` and `08:00` UTC, but the script only runs when Paris time is `09:00`.
+In Paris, this is usually:
 
-This handles summer and winter time:
+- `09:00` during summer time
+- `08:00` during winter time
 
-- summer: Monday 09:00 Paris = 07:00 UTC
-- winter: Monday 09:00 Paris = 08:00 UTC
+GitHub can sometimes start scheduled jobs late. Voxy now sends the weekly email whenever that Monday job actually starts, so a GitHub delay will not silently block the email.
 
 Each normal weekly run sends one summary email per recipient, even when there is no new alert. Products with issues are still marked in the email.
 
