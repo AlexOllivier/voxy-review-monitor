@@ -55,24 +55,18 @@ def newsletter_html(plain_body: str) -> str:
   <style>
     body {{ margin:0; padding:0; background:#f3f5f8; color:#14213d; font-family:Arial, Helvetica, sans-serif; }}
     .wrap {{ max-width:760px; margin:0 auto; padding:28px 18px; }}
-    .hero {{ background:#ffffff; border:1px solid #dde3ea; border-radius:16px; padding:24px; text-align:left; }}
-    .brand-row {{ display:flex; align-items:center; justify-content:space-between; gap:18px; }}
-    .brand {{ display:flex; align-items:center; gap:14px; }}
-    .mascot {{ width:68px; height:68px; border-radius:22px; background:#dffcf1; position:relative; flex:0 0 auto; }}
-    .mascot:before {{ content:''; position:absolute; width:34px; height:40px; left:17px; top:16px; background:#39d6b2; border-radius:18px 18px 14px 14px; }}
-    .mascot:after {{ content:''; position:absolute; width:30px; height:16px; left:19px; top:8px; background:#7067f0; border-radius:16px 16px 4px 4px; }}
-    .face {{ position:absolute; left:30px; top:28px; width:8px; height:8px; background:#101828; border-radius:50%; z-index:2; box-shadow:16px 0 0 #101828; }}
-    .map {{ position:absolute; left:12px; top:43px; width:26px; height:19px; background:#ffe174; border-radius:4px; transform:rotate(-8deg); z-index:3; }}
-    .logo {{ color:#22316f; font-size:28px; font-weight:800; letter-spacing:0; }}
-    .logo-mark {{ display:inline-block; color:#00a778; font-weight:900; margin-right:6px; }}
-    .hero h1 {{ margin:18px 0 10px; font-size:30px; color:#101828; letter-spacing:0; }}
-    .sub {{ color:#667085; font-size:14px; margin:0; }}
-    .pill {{ display:inline-block; background:#e7fff7; color:#007f63; border:1px solid #b8f3de; border-radius:999px; padding:8px 14px; font-weight:700; }}
+    .hero {{ background:#ffffff; border:1px solid #dde3ea; border-radius:16px; padding:28px 24px; text-align:center; }}
+    .brand-row {{ display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; }}
+    .brand {{ display:block; text-align:center; }}
+    .logo {{ color:#22316f; font-size:30px; font-weight:700; letter-spacing:0; line-height:1; }}
+    .hero h1 {{ margin:20px 0 10px; font-size:30px; color:#101828; letter-spacing:0; font-weight:600; }}
+    .sub {{ color:#667085; font-size:14px; line-height:1.5; margin:0 auto; max-width:560px; }}
+    .pill {{ display:inline-block; background:#e7fff7; color:#007f63; border:1px solid #b8f3de; border-radius:999px; padding:8px 16px; font-weight:500; }}
     .card {{ background:white; border:1px solid #e5e7eb; border-radius:12px; margin-top:18px; padding:22px; box-shadow:0 4px 14px rgba(16,24,40,.07); }}
-    .card h2 {{ margin:0 0 16px; font-size:20px; color:#101828; }}
-    .row {{ display:flex; gap:14px; justify-content:space-between; align-items:flex-start; border-top:1px solid #edf0f3; padding:10px 0; text-align:left; }}
-    .row span {{ color:#667085; min-width:170px; font-size:13px; font-weight:700; text-transform:uppercase; }}
-    .row strong {{ color:#101828; font-size:14px; text-align:right; font-weight:600; }}
+    .card h2 {{ margin:0 0 16px; font-size:20px; color:#101828; text-align:center; font-weight:600; }}
+    .row {{ display:flex; gap:14px; justify-content:space-between; align-items:center; border-top:1px solid #edf0f3; padding:10px 0; text-align:left; }}
+    .row span {{ color:#667085; min-width:170px; font-size:13px; font-weight:500; text-transform:uppercase; }}
+    .row strong {{ color:#101828; font-size:14px; text-align:right; font-weight:400; }}
     .action {{ background:#fff8db; border:1px solid #f4d35e; border-radius:10px; padding:12px; margin-top:10px; }}
     .line {{ color:#475467; margin:8px 0; }}
     .footer {{ text-align:center; color:#667085; font-size:12px; margin-top:22px; }}
@@ -87,8 +81,7 @@ def newsletter_html(plain_body: str) -> str:
     <div class="hero">
       <div class="brand-row">
         <div class="brand">
-          <div class="mascot"><div class="face"></div><div class="map"></div></div>
-          <div class="logo"><span class="logo-mark">↻</span>VoxCity</div>
+          <div class="logo">VoxCity</div>
         </div>
         <div class="pill">{product_count} product(s) need attention</div>
       </div>
