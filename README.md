@@ -1,14 +1,16 @@
 # Voxy Cloud - Weekly GitHub Actions Setup
 
-Voxy runs from GitHub once per week, reads the shared Google Sheet, checks review pages, sends one weekly email summary to the addresses listed in `Alert emails`, and creates a dashboard artifact.
+Voxy runs from GitHub once per week, reads the shared Google Sheet, checks review pages, sends an email only when a product has new bad reviews or a score alert, and creates a dashboard artifact.
 
 Your PC does not need to stay on.
 
-## Files to upload
+## Files in GitHub
 
-Upload these files to the root of the GitHub repository:
+These files must be present at the root of the GitHub repository:
 
 - `voxy_review_monitor.py`
+- `voxy_weekly_alert_runner.py`
+- `voxy_newsletter_runner.py`
 - `requirements.txt`
 - `README.md`
 - `QUICK_START.md`
@@ -27,9 +29,33 @@ In Paris, this is usually:
 - `09:00` during summer time
 - `08:00` during winter time
 
-GitHub can sometimes start scheduled jobs late. Voxy now sends the weekly email whenever that Monday job actually starts, so a GitHub delay will not silently block the email.
+GitHub can sometimes start scheduled jobs late. Voxy sends the alert email whenever that Monday job actually starts, so a GitHub delay will not silently block the email.
 
-Each normal weekly run sends one summary email per recipient, even when there is no new alert. Products with issues are still marked in the email.
+Email is selective: Voxy sends an email only to recipients whose products have new bad reviews or a score alert. Products with good scores, no bad reviews, or only technical extraction issues are not included in the email.
+
+Alert emails are sent as an HTML newsletter with one visual card per product in alert.
+
+## Google Sheet format
+
+The Google Sheet file can be named `voxy`; the important part is that `GOOGLE_SHEET_URL` points to the correct file and that the product tab is named `Produits`.
+
+Recommended column order in `Produits`:
+
+`Active`, `Country`, `City`, `Owner`, `Product name`, `URL to monitor`, `Alert emails`, `Star threshold`, `Platform`, `Notes`
+
+Supported aliases:
+
+- `Country` or `Pays`
+- `City` or `Ville`
+- `Owner`, `Product owner`, or `Responsable`
+
+## Dashboard behavior
+
+The Google Sheet `Dashboard` tab is updated for all active products and includes `Country`, `City`, and `Owner`.
+
+Dashboard cells are centered, vertically centered, and wrapped so the table stays readable.
+
+The dashboard action column uses concrete examples from the bad review text when available, instead of generic actions.
 
 ## Required GitHub secrets
 
@@ -58,7 +84,7 @@ Optional:
 | `DEEPL_API_KEY` | DeepL key if translation is enabled |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | Service account JSON if Voxy should update dashboard tabs inside the shared Google Sheet |
 
-If `GOOGLE_SERVICE_ACCOUNT_JSON` is not configured, the workflow still sends the weekly email and uploads the Excel dashboard artifact.
+If `GOOGLE_SERVICE_ACCOUNT_JSON` is not configured, the workflow still sends alert emails and uploads the Excel dashboard artifact.
 
 ## Manual test
 
