@@ -15,12 +15,36 @@ ORIGINAL_UPDATE_GOOGLE_SHEET_DASHBOARD = runner.update_google_sheet_dashboard
 def line_to_html(line: str) -> str:
     escaped = html.escape(line)
     if ": " not in line:
-        return f"<div class='line'>{escaped}</div>"
+        return f"<tr><td style='padding:8px 0;color:#475467;font-size:14px;line-height:1.45;'>{escaped}</td></tr>"
     label, value = escaped.split(": ", 1)
-    class_name = "row row-left" if label in {"Action", "Link"} else "row"
+    label_cell = (
+        "color:#667085;font-size:12px;font-weight:500;text-transform:uppercase;"
+        "letter-spacing:0;padding:10px 14px 10px 0;border-top:1px solid #edf0f3;"
+        "width:170px;vertical-align:top;"
+    )
+    value_cell = (
+        "color:#101828;font-size:14px;font-weight:400;line-height:1.45;"
+        "padding:10px 0;border-top:1px solid #edf0f3;text-align:right;vertical-align:top;"
+    )
+    if label in {"Action", "Link"}:
+        value_style = "color:#101828;font-size:14px;font-weight:400;line-height:1.45;text-align:left;word-break:break-word;"
+        block_style = "padding:12px 0 4px;border-top:1px solid #edf0f3;text-align:left;"
+        if label == "Action":
+            block_style = (
+                "padding:12px;border:1px solid #f4d35e;background:#fff8db;"
+                "border-radius:10px;text-align:left;"
+            )
+        if label == "Link":
+            value = f"<a href='{value}' style='color:#006fd6;text-decoration:none;word-break:break-word;'>{value}</a>"
+        return (
+            f"<tr><td colspan='2' style='{block_style}'>"
+            f"<div style='color:#667085;font-size:12px;font-weight:500;text-transform:uppercase;margin-bottom:6px;'>{label}</div>"
+            f"<div style='{value_style}'>{value}</div>"
+            f"</td></tr>"
+        )
     if label == "Link":
         value = f"<a href='{value}'>{value}</a>"
-    return f"<div class='{class_name}'><span>{label}</span><strong>{value}</strong></div>"
+    return f"<tr><td style='{label_cell}'>{label}</td><td style='{value_cell}'>{value}</td></tr>"
 
 
 def newsletter_html(plain_body: str) -> str:
@@ -48,56 +72,46 @@ def newsletter_html(plain_body: str) -> str:
     for card in cards:
         heading = html.escape(card[0])
         details = "\n".join(line_to_html(line) for line in card[1:] if line.strip())
-        card_html.append(f"<section class='card'><h2>{heading}</h2>{details}</section>")
+        card_html.append(
+            "<table role='presentation' width='100%' cellpadding='0' cellspacing='0' "
+            "style='background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;margin-top:18px;'>"
+            "<tr><td style='padding:22px;'>"
+            f"<h2 style='margin:0 0 16px;color:#101828;font-size:20px;font-weight:600;text-align:center;line-height:1.3;'>{heading}</h2>"
+            "<table role='presentation' width='100%' cellpadding='0' cellspacing='0'>"
+            f"{details}"
+            "</table>"
+            "</td></tr>"
+            "</table>"
+        )
 
     return f"""<!doctype html>
 <html>
 <head>
   <meta charset="utf-8">
-  <style>
-    body {{ margin:0; padding:0; background:#f3f5f8; color:#14213d; font-family:Arial, Helvetica, sans-serif; }}
-    .wrap {{ max-width:760px; margin:0 auto; padding:28px 18px; }}
-    .hero {{ background:#ffffff; border:1px solid #dde3ea; border-radius:16px; padding:28px 24px; text-align:center; }}
-    .brand-row {{ display:block; text-align:center; }}
-    .brand {{ display:block; text-align:center; }}
-    .logo {{ color:#22316f; font-size:30px; font-weight:700; letter-spacing:0; line-height:1; }}
-    .hero h1 {{ margin:20px 0 10px; font-size:30px; color:#101828; letter-spacing:0; font-weight:600; }}
-    .sub {{ color:#667085; font-size:14px; line-height:1.5; margin:0 auto; white-space:nowrap; }}
-    .pill {{ display:inline-block; background:#e7fff7; color:#007f63; border:1px solid #b8f3de; border-radius:999px; padding:8px 16px; font-weight:500; margin-top:12px; }}
-    .card {{ background:white; border:1px solid #e5e7eb; border-radius:12px; margin-top:18px; padding:22px; box-shadow:0 4px 14px rgba(16,24,40,.07); }}
-    .card h2 {{ margin:0 0 16px; font-size:20px; color:#101828; text-align:center; font-weight:600; }}
-    .row {{ display:flex; gap:14px; justify-content:space-between; align-items:center; border-top:1px solid #edf0f3; padding:10px 0; text-align:left; }}
-    .row span {{ color:#667085; min-width:170px; font-size:13px; font-weight:500; text-transform:uppercase; }}
-    .row strong {{ color:#101828; font-size:14px; text-align:right; font-weight:400; }}
-    .row-left {{ display:block; text-align:left; }}
-    .row-left span {{ display:block; min-width:0; margin-bottom:6px; }}
-    .row-left strong {{ display:block; text-align:left; line-height:1.45; word-break:break-word; }}
-    .row-left a {{ color:#006fd6; text-decoration:none; word-break:break-word; }}
-    .action {{ background:#fff8db; border:1px solid #f4d35e; border-radius:10px; padding:12px; margin-top:10px; }}
-    .line {{ color:#475467; margin:8px 0; }}
-    .footer {{ text-align:center; color:#667085; font-size:12px; margin-top:22px; }}
-    @media (max-width:600px) {{
-      .row {{ display:block; }}
-      .row strong {{ display:block; text-align:left; margin-top:4px; }}
-      .sub {{ white-space:normal; }}
-    }}
-  </style>
 </head>
-<body>
-  <div class="wrap">
-    <div class="hero">
-      <div class="brand-row">
-        <div class="brand">
-          <div class="logo">VoxCity</div>
-        </div>
-        <div class="pill">{product_count} product(s) remaining</div>
-      </div>
-      <h1>{title}</h1>
-      <p class="sub">Weekly product review monitoring focused on platform scores, low reviews, and concrete actions.</p>
-    </div>
+<body style="margin:0;padding:0;background:#f3f5f8;color:#14213d;font-family:Arial,Helvetica,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f5f8;">
+    <tr>
+      <td align="center" style="padding:28px 18px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:760px;">
+          <tr>
+            <td align="center" style="background:#ffffff;border:1px solid #dde3ea;border-radius:16px;padding:28px 24px;text-align:center;">
+              <div style="color:#22316f;font-size:30px;font-weight:700;line-height:1;letter-spacing:0;text-align:center;">VoxCity</div>
+              <div style="display:inline-block;background:#e7fff7;color:#007f63;border:1px solid #b8f3de;border-radius:999px;padding:8px 16px;font-size:14px;font-weight:500;margin-top:12px;text-align:center;">{product_count} product(s) remaining</div>
+              <h1 style="margin:20px 0 10px;color:#101828;font-size:30px;font-weight:600;line-height:1.25;text-align:center;letter-spacing:0;">{title}</h1>
+              <div style="color:#667085;font-size:14px;line-height:1.5;text-align:center;white-space:nowrap;">Weekly product review monitoring focused on platform scores, low reviews, and concrete actions.</div>
+            </td>
+          </tr>
+          <tr>
+            <td>
     {''.join(card_html)}
-    <div class="footer">Voxy review monitoring - dashboard updated automatically when Google Sheet access is configured.</div>
-  </div>
+              <div style="text-align:center;color:#667085;font-size:12px;margin-top:22px;">Voxy review monitoring - dashboard updated automatically when Google Sheet access is configured.</div>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
 </body>
 </html>"""
 
