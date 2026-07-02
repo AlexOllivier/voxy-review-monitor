@@ -23,7 +23,7 @@ def line_to_html(line: str) -> str:
 
 def newsletter_html(plain_body: str) -> str:
     lines = plain_body.splitlines()
-    title = html.escape(lines[0] if lines else "Voxy bad review alert")
+    title = html.escape(lines[0] if lines else "Products Reviews Update")
     product_count = "0"
     for line in lines:
         if line.startswith("Products in alert:"):
@@ -55,9 +55,19 @@ def newsletter_html(plain_body: str) -> str:
   <style>
     body {{ margin:0; padding:0; background:#f3f5f8; color:#14213d; font-family:Arial, Helvetica, sans-serif; }}
     .wrap {{ max-width:760px; margin:0 auto; padding:28px 18px; }}
-    .hero {{ background:#101828; color:white; border-radius:14px; padding:28px; text-align:center; }}
-    .hero h1 {{ margin:0 0 12px; font-size:28px; letter-spacing:0; }}
-    .pill {{ display:inline-block; background:#ffcf33; color:#101828; border-radius:999px; padding:8px 14px; font-weight:700; }}
+    .hero {{ background:#ffffff; border:1px solid #dde3ea; border-radius:16px; padding:24px; text-align:left; }}
+    .brand-row {{ display:flex; align-items:center; justify-content:space-between; gap:18px; }}
+    .brand {{ display:flex; align-items:center; gap:14px; }}
+    .mascot {{ width:68px; height:68px; border-radius:22px; background:#dffcf1; position:relative; flex:0 0 auto; }}
+    .mascot:before {{ content:''; position:absolute; width:34px; height:40px; left:17px; top:16px; background:#39d6b2; border-radius:18px 18px 14px 14px; }}
+    .mascot:after {{ content:''; position:absolute; width:30px; height:16px; left:19px; top:8px; background:#7067f0; border-radius:16px 16px 4px 4px; }}
+    .face {{ position:absolute; left:30px; top:28px; width:8px; height:8px; background:#101828; border-radius:50%; z-index:2; box-shadow:16px 0 0 #101828; }}
+    .map {{ position:absolute; left:12px; top:43px; width:26px; height:19px; background:#ffe174; border-radius:4px; transform:rotate(-8deg); z-index:3; }}
+    .logo {{ color:#22316f; font-size:28px; font-weight:800; letter-spacing:0; }}
+    .logo-mark {{ display:inline-block; color:#00a778; font-weight:900; margin-right:6px; }}
+    .hero h1 {{ margin:18px 0 10px; font-size:30px; color:#101828; letter-spacing:0; }}
+    .sub {{ color:#667085; font-size:14px; margin:0; }}
+    .pill {{ display:inline-block; background:#e7fff7; color:#007f63; border:1px solid #b8f3de; border-radius:999px; padding:8px 14px; font-weight:700; }}
     .card {{ background:white; border:1px solid #e5e7eb; border-radius:12px; margin-top:18px; padding:22px; box-shadow:0 4px 14px rgba(16,24,40,.07); }}
     .card h2 {{ margin:0 0 16px; font-size:20px; color:#101828; }}
     .row {{ display:flex; gap:14px; justify-content:space-between; align-items:flex-start; border-top:1px solid #edf0f3; padding:10px 0; text-align:left; }}
@@ -75,8 +85,15 @@ def newsletter_html(plain_body: str) -> str:
 <body>
   <div class="wrap">
     <div class="hero">
+      <div class="brand-row">
+        <div class="brand">
+          <div class="mascot"><div class="face"></div><div class="map"></div></div>
+          <div class="logo"><span class="logo-mark">↻</span>VoxCity</div>
+        </div>
+        <div class="pill">{product_count} product(s) need attention</div>
+      </div>
       <h1>{title}</h1>
-      <div class="pill">{product_count} product(s) need attention</div>
+      <p class="sub">Weekly product review monitoring focused on platform scores, low reviews, and concrete actions.</p>
     </div>
     {''.join(card_html)}
     <div class="footer">Voxy review monitoring - dashboard updated automatically when Google Sheet access is configured.</div>

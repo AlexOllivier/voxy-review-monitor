@@ -32,8 +32,16 @@ def first_int(value):
 def rating_summary_from_json(value):
     if isinstance(value, dict):
         aggregate = value.get("aggregateRating") if isinstance(value.get("aggregateRating"), dict) else value
-        rating = first_number(aggregate.get("ratingValue") or aggregate.get("rating") or aggregate.get("averageRating"))
-        count = first_int(aggregate.get("reviewCount") or aggregate.get("ratingCount") or aggregate.get("count"))
+        rating = first_number(
+            aggregate.get("ratingValue")
+            or aggregate.get("rating")
+            or aggregate.get("averageRating")
+        )
+        count = first_int(
+            aggregate.get("reviewCount")
+            or aggregate.get("ratingCount")
+            or aggregate.get("count")
+        )
         if rating is not None and 0 < rating <= 5:
             return {"score": round(rating, 2), "review_count": count, "source": "page aggregate"}
         for child in value.values():
@@ -60,6 +68,7 @@ def extract_official_rating_summary(html):
             continue
         if found:
             return found
+
     patterns = [
         r'"ratingValue"\s*:\s*"?(\d+(?:[\.,]\d+)?)"?[^{}]{0,250}"reviewCount"\s*:\s*"?(\d+)"?',
         r'"reviewCount"\s*:\s*"?(\d+)"?[^{}]{0,250}"ratingValue"\s*:\s*"?(\d+(?:[\.,]\d+)?)"?',
@@ -80,17 +89,49 @@ def extract_official_rating_summary(html):
     return {}
 
 
+def fetch_official_rating_summary_with_browser(url):
+    try:
+        with base.sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True, args=["--no-sandbox"])
+            page = browser.new_page(
+                locale="fr-FR",
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/126.0 Safari/537.36"
+                ),
+            )
+            page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            page.wait_for_timeout(3500)
+            html = page.content()
+            visible_text = page.locator("body").inner_text(timeout=10000)
+            browser.close()
+        return extract_official_rating_summary(html) or extract_official_rating_summary(visible_text)
+    except Exception as exc:
+        print(f"Browser official platform score skipped for {url}: {exc}")
+        return {}
+
+
 def fetch_official_rating_summary(url):
     if url in OFFICIAL_RATING_CACHE:
         return OFFICIAL_RATING_CACHE[url]
     summary = {}
     try:
-        request = Request(url, headers={"User-Agent": "Mozilla/5.0 Chrome/126.0 Safari/537.36", "Accept-Language": "en-US,en;q=0.9,fr;q=0.8"})
+        request = Request(url, headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/126.0 Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.9,fr;q=0.8",
+        })
         with urlopen(request, timeout=30) as response:
             html = response.read().decode("utf-8", errors="ignore")
         summary = extract_official_rating_summary(html)
     except Exception as exc:
         print(f"Official platform score skipped for {url}: {exc}")
+    if not summary:
+        summary = fetch_official_rating_summary_with_browser(url)
     OFFICIAL_RATING_CACHE[url] = summary or {}
     return OFFICIAL_RATING_CACHE[url]
 
@@ -139,10 +180,12 @@ def products_from_rows(rows):
     platform_account_col = headers.get("platform account", headers.get("compte plateforme"))
     if None in {active_col, name_col, url_col, emails_col}:
         raise ValueError("Missing required columns in Google Sheet. Expected: Active, Product name, URL to monitor, Alert emails.")
+
     products = []
     for row_number, row in enumerate(rows[1:], start=2):
         def cell(index, default=""):
             return row[index] if index is not None and index < len(row) else default
+
         active = str(cell(active_col)).strip().lower()
         name = str(cell(name_col)).strip()
         url = str(cell(url_col)).strip()
@@ -213,15 +256,23 @@ def google_rows_for_dashboard(summaries):
     ]
     for item in summaries:
         rows.append([
-            item["product"], item.get("country", ""), item.get("city", ""), item.get("owner", ""), item.get("priority", ""),
-            base.product_health_with_icon(item), base.trend_with_arrow(item),
+            item["product"],
+            item.get("country", ""),
+            item.get("city", ""),
+            item.get("owner", ""),
+            item.get("priority", ""),
+            base.product_health_with_icon(item),
+            base.trend_with_arrow(item),
             item["global_score"] if item["global_score"] is not None else "N/A",
             item.get("official_score") if item.get("official_score") is not None else "N/A",
             item.get("official_review_count") if item.get("official_review_count") is not None else "N/A",
             item.get("detected_score") if item.get("detected_score") is not None else "N/A",
-            item.get("detected_review_count", 0), item["low_review_count"], item["critical_review_count"],
+            item.get("detected_review_count", 0),
+            item["low_review_count"],
+            item["critical_review_count"],
             ", ".join(item.get("themes", [])[:2]) or "No issue detected",
-            (item.get("concrete_actions") or item.get("suggestions") or ["No action needed"])[0], item["url"],
+            (item.get("concrete_actions") or item.get("suggestions") or ["No action needed"])[0],
+            item["url"],
         ])
     return rows
 
@@ -242,7 +293,14 @@ def update_google_sheet_dashboard(sheet_url, summaries):
 
 def build_summary_email_body(recipient, entries, timezone_name):
     now = datetime.now(ZoneInfo(timezone_name)).strftime("%Y-%m-%d %H:%M")
-    lines = ["Voxy bad review alert", "", f"Recipient: {recipient}", f"Check time: {now} ({timezone_name})", f"Products in alert: {len(entries)}", ""]
+    lines = [
+        "Products Reviews Update",
+        "",
+        f"Recipient: {recipient}",
+        f"Check time: {now} ({timezone_name})",
+        f"Products in alert: {len(entries)}",
+        "",
+    ]
     for index, entry in enumerate(entries, start=1):
         summary = entry["summary"]
         lines.extend([
@@ -255,14 +313,13 @@ def build_summary_email_body(recipient, entries, timezone_name):
             f"Status: {base.product_health_with_icon(summary)}",
             f"Trend: {base.trend_with_arrow(summary)}",
             f"Score: {summary['global_score'] if summary['global_score'] is not None else 'N/A'}/5",
-            f"Official platform score: {summary.get('official_score') if summary.get('official_score') is not None else 'N/A'}/5 from {summary.get('official_review_count') or 'N/A'} reviews",
-            f"Voxy detected sample score: {summary.get('detected_score') if summary.get('detected_score') is not None else 'N/A'}/5 from {summary.get('detected_review_count') or 0} detected reviews",
-            f"Score alert threshold: {summary.get('score_threshold', 3.0)}/5",
+            *([f"Platform score: {summary.get('official_score')}/5 from {summary.get('official_review_count') or 'N/A'} reviews"] if summary.get("official_score") is not None else []),
+            f"Voxy sample: {summary.get('detected_score') if summary.get('detected_score') is not None else 'N/A'}/5 from {summary.get('detected_review_count') or 0} detected reviews",
             f"Low reviews: {summary['low_review_count']}",
             f"Critical reviews < 3: {summary['critical_review_count']}",
-            f"Reason: {', '.join(entry['reasons'])}",
             f"Action: {(summary.get('concrete_actions') or summary.get('suggestions') or ['Review product feedback'])[0]}",
-            f"Link: {summary['url']}", "",
+            f"Link: {summary['url']}",
+            "",
         ])
     return "\n".join(lines).strip()
 
@@ -280,12 +337,14 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--baseline", action="store_true")
     args = parser.parse_args()
+
     base.load_dotenv()
     base.products_from_rows = products_from_rows
     base.summarize_reviews = summarize_reviews
     base.google_rows_for_dashboard = google_rows_for_dashboard
     base.update_google_sheet_dashboard = update_google_sheet_dashboard
     base.build_summary_email_body = build_summary_email_body
+
     sheet_url = args.sheet_url or os.environ.get("GOOGLE_SHEET_URL", "")
     input_xlsx = Path(args.xlsx)
     if sheet_url and os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip():
@@ -296,6 +355,7 @@ def main():
         products = base.load_products(input_xlsx)
     else:
         products = base.load_products(input_xlsx)
+
     seen = base.load_seen(Path(args.state))
     new_seen = set(seen)
     subject_prefix = base.english_subject_prefix()
@@ -307,6 +367,7 @@ def main():
     if not products:
         print("No active products found.")
         return 0
+
     summaries = []
     alert_entries_by_recipient = {}
     for product in products:
@@ -319,8 +380,10 @@ def main():
             error_summary["city"] = getattr(product, "city", "")
             summaries.append(error_summary)
             continue
+
         for review in reviews:
             new_seen.add(base.seen_key(product, review))
+
         if args.include_past_dated_reviews:
             current_reviews = reviews
         else:
@@ -328,12 +391,17 @@ def main():
             skipped = len(reviews) - len(current_reviews)
             if skipped:
                 print(f"Skipped {skipped} review(s) dated before {local_today.isoformat()} ({args.timezone}).")
+
         summary = summarize_reviews(product, current_reviews)
         summaries.append(summary)
-        low_reviews = [review for review in current_reviews if review.rating <= product.threshold and base.seen_key(product, review) not in seen]
+        low_reviews = [
+            review for review in current_reviews
+            if review.rating <= product.threshold and base.seen_key(product, review) not in seen
+        ]
         if args.baseline:
             print(f"Baseline: {len(reviews)} reviews saved, no email sent.")
             continue
+
         alert_reasons = []
         if summary["alert"] and base.score_alert_key(product, summary) not in seen and base.alert_type_allows(product, "score"):
             alert_reasons.append(f"score below {product.score_threshold}")
@@ -345,11 +413,12 @@ def main():
                 alert_entries_by_recipient.setdefault(recipient, []).append({"summary": summary, "reasons": alert_reasons})
         else:
             print(f"OK: no new bad reviews or score alert for {product.name}.")
+
     if alert_entries_by_recipient and not args.baseline:
         base.annotate_email_trends(sheet_url, summaries)
         for recipient, entries in sorted(alert_entries_by_recipient.items()):
             body = build_summary_email_body(recipient, entries, args.timezone)
-            subject = f"{subject_prefix} Voxy bad review alert: {len(entries)} product(s) need attention"
+            subject = "Products Reviews Update"
             if args.dry_run:
                 print("DRY RUN - bad review alert email not sent")
                 print(body)
@@ -357,6 +426,7 @@ def main():
                 print(f"Bad review alert sent to: {recipient}")
     elif not args.baseline:
         print("OK: no products with new bad reviews or score alerts to email.")
+
     if summaries:
         base.build_dashboard_report(summaries, Path(args.report))
         print(f"Dashboard report saved: {args.report}")
@@ -364,6 +434,7 @@ def main():
             if not sheet_url:
                 raise RuntimeError("--update-google-sheet-dashboard requires GOOGLE_SHEET_URL or --sheet-url.")
             update_google_sheet_dashboard(sheet_url, summaries)
+
     base.save_seen(Path(args.state), new_seen)
     return 0
 
