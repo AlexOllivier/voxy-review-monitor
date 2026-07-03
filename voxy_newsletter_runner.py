@@ -12,6 +12,15 @@ import voxy_weekly_alert_runner as runner
 ORIGINAL_UPDATE_GOOGLE_SHEET_DASHBOARD = runner.update_google_sheet_dashboard
 DASHBOARD_URL = "https://docs.google.com/spreadsheets/d/1XC_qHi4iPQeU9ashkwwaspw2tpVFWD-hWSTB8YuVy7A/edit?usp=sharing"
 DASHBOARD_COLUMN_WIDTHS = [360, 95, 120, 165, 120, 105, 125, 125, 145, 190, 380]
+INDICATOR_COLORS = {
+    "good": {"red": 0.84, "green": 0.96, "blue": 0.89},
+    "clear": {"red": 0.84, "green": 0.96, "blue": 0.89},
+    "watch": {"red": 1.0, "green": 0.95, "blue": 0.75},
+    "low reviews": {"red": 1.0, "green": 0.90, "blue": 0.78},
+    "critical reviews": {"red": 1.0, "green": 0.84, "blue": 0.84},
+    "score alert": {"red": 1.0, "green": 0.84, "blue": 0.84},
+    "technical check": {"red": 0.92, "green": 0.87, "blue": 1.0},
+}
 
 
 def line_to_html(line: str) -> str:
@@ -167,7 +176,41 @@ def try_send_newsletter_email(recipients, subject, body):
         return False
 
 
-def apply_dashboard_layout(spreadsheet, dashboard):
+def indicator_color(value):
+    normalized = str(value or "").lower()
+    for key, color in INDICATOR_COLORS.items():
+        if key in normalized:
+            return color
+    return {"red": 1, "green": 1, "blue": 1}
+
+
+def indicator_format_request(dashboard, row_index, column_index, value):
+    return {
+        "repeatCell": {
+            "range": {
+                "sheetId": dashboard.id,
+                "startRowIndex": row_index,
+                "endRowIndex": row_index + 1,
+                "startColumnIndex": column_index,
+                "endColumnIndex": column_index + 1,
+            },
+            "cell": {
+                "userEnteredFormat": {
+                    "backgroundColor": indicator_color(value),
+                    "horizontalAlignment": "CENTER",
+                    "verticalAlignment": "MIDDLE",
+                    "textFormat": {
+                        "bold": True,
+                        "foregroundColor": {"red": 0.05, "green": 0.08, "blue": 0.16},
+                    },
+                }
+            },
+            "fields": "userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,textFormat)",
+        }
+    }
+
+
+def apply_dashboard_layout(spreadsheet, dashboard, summaries):
     requests = []
     for index, width in enumerate(DASHBOARD_COLUMN_WIDTHS):
         requests.append({
@@ -194,6 +237,11 @@ def apply_dashboard_layout(spreadsheet, dashboard):
             "fields": "pixelSize",
         }
     })
+    for row_offset, summary in enumerate(summaries, start=7):
+        health = base.product_health_with_icon(summary)
+        risk_signal = runner.dashboard_risk_signal(summary)
+        requests.append(indicator_format_request(dashboard, row_offset, 5, health))
+        requests.append(indicator_format_request(dashboard, row_offset, 8, risk_signal))
     spreadsheet.batch_update({"requests": requests})
 
 
@@ -242,7 +290,7 @@ def centered_update_google_sheet_dashboard(sheet_url, summaries):
         },
         "backgroundColor": {"red": 0.91, "green": 0.94, "blue": 0.98},
     })
-    apply_dashboard_layout(spreadsheet, dashboard)
+    apply_dashboard_layout(spreadsheet, dashboard, summaries)
     print("Dashboard cells centered.")
 
 
