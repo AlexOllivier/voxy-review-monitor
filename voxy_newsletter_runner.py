@@ -11,6 +11,7 @@ import voxy_weekly_alert_runner as runner
 
 ORIGINAL_UPDATE_GOOGLE_SHEET_DASHBOARD = runner.update_google_sheet_dashboard
 DASHBOARD_URL = "https://docs.google.com/spreadsheets/d/1XC_qHi4iPQeU9ashkwwaspw2tpVFWD-hWSTB8YuVy7A/edit?usp=sharing"
+DASHBOARD_COLUMN_WIDTHS = [360, 95, 120, 165, 105, 125, 125, 145, 190, 380]
 
 
 def line_to_html(line: str) -> str:
@@ -166,6 +167,36 @@ def try_send_newsletter_email(recipients, subject, body):
         return False
 
 
+def apply_dashboard_layout(spreadsheet, dashboard):
+    requests = []
+    for index, width in enumerate(DASHBOARD_COLUMN_WIDTHS):
+        requests.append({
+            "updateDimensionProperties": {
+                "range": {
+                    "sheetId": dashboard.id,
+                    "dimension": "COLUMNS",
+                    "startIndex": index,
+                    "endIndex": index + 1,
+                },
+                "properties": {"pixelSize": width},
+                "fields": "pixelSize",
+            }
+        })
+    requests.append({
+        "updateDimensionProperties": {
+            "range": {
+                "sheetId": dashboard.id,
+                "dimension": "ROWS",
+                "startIndex": 6,
+                "endIndex": 7,
+            },
+            "properties": {"pixelSize": 42},
+            "fields": "pixelSize",
+        }
+    })
+    spreadsheet.batch_update({"requests": requests})
+
+
 def centered_update_google_sheet_dashboard(sheet_url, summaries):
     ORIGINAL_UPDATE_GOOGLE_SHEET_DASHBOARD(sheet_url, summaries)
     client = base.google_client_from_env()
@@ -173,6 +204,7 @@ def centered_update_google_sheet_dashboard(sheet_url, summaries):
         return
     spreadsheet = client.open_by_url(sheet_url)
     dashboard = spreadsheet.worksheet("Dashboard")
+    dashboard.resize(rows=max(100, len(summaries) + 10), cols=10)
     dashboard.format("A:J", {
         "horizontalAlignment": "CENTER",
         "verticalAlignment": "MIDDLE",
@@ -201,6 +233,7 @@ def centered_update_google_sheet_dashboard(sheet_url, summaries):
             "bold": True,
         },
     })
+    apply_dashboard_layout(spreadsheet, dashboard)
     print("Dashboard cells centered.")
 
 

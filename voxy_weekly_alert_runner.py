@@ -334,9 +334,10 @@ def update_google_sheet_dashboard(sheet_url, summaries):
     spreadsheet = client.open_by_url(sheet_url)
     base.annotate_trends_from_history(spreadsheet, summaries)
     dashboard = base.get_or_create_worksheet(spreadsheet, "Dashboard", rows=max(100, len(summaries) + 10), cols=10)
+    dashboard.resize(rows=max(100, len(summaries) + 10), cols=10)
     dashboard.clear()
     dashboard.update(base.rectangularize_rows(google_rows_for_dashboard(summaries)), value_input_option="USER_ENTERED")
-    dashboard.freeze(rows=1)
+    dashboard.freeze(rows=7, cols=1)
     base.append_history_rows(spreadsheet, summaries)
     print("Shared Google Sheet alert dashboard updated.")
 
