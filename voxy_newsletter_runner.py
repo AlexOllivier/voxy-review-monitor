@@ -19,12 +19,12 @@ def line_to_html(line: str) -> str:
     label, value = escaped.split(": ", 1)
     label_cell = (
         "color:#667085;font-size:12px;font-weight:500;text-transform:uppercase;"
-        "letter-spacing:0;padding:10px 14px 10px 0;border-top:1px solid #edf0f3;"
-        "width:170px;vertical-align:top;"
+        "letter-spacing:0;padding:10px 10px 10px 0;border-top:1px solid #edf0f3;"
+        "width:125px;vertical-align:top;"
     )
     value_cell = (
         "color:#101828;font-size:14px;font-weight:400;line-height:1.45;"
-        "padding:10px 0;border-top:1px solid #edf0f3;text-align:right;vertical-align:top;"
+        "padding:10px 0;border-top:1px solid #edf0f3;text-align:left;vertical-align:top;"
     )
     if label in {"Action", "Link"}:
         value_style = "color:#101828;font-size:14px;font-weight:400;line-height:1.45;text-align:left;word-break:break-word;"
