@@ -282,6 +282,24 @@ def dashboard_main_issue(item):
     return "No issue detected"
 
 
+def email_entry_sort_key(entry):
+    summary = entry["summary"]
+    score = summary.get("official_score")
+    if score is None:
+        score = summary.get("global_score")
+    if score is None:
+        score = summary.get("detected_score")
+    priority_rank = {"high": 0, "haute": 0, "medium": 1, "moyenne": 1, "low": 2, "basse": 2}
+    priority = str(summary.get("priority") or "Medium").strip().lower()
+    return (
+        score if score is not None else 99,
+        priority_rank.get(priority, 1),
+        -int(summary.get("critical_review_count", 0) or 0),
+        -int(summary.get("low_review_count", 0) or 0),
+        str(summary.get("product", "")).lower(),
+    )
+
+
 def google_rows_for_dashboard(summaries):
     global_summary = base.build_global_synthesis(summaries)
     rows = [
@@ -325,20 +343,21 @@ def update_google_sheet_dashboard(sheet_url, summaries):
 
 def build_summary_email_body(recipient, entries, timezone_name):
     now = datetime.now(ZoneInfo(timezone_name)).strftime("%Y-%m-%d %H:%M")
+    sorted_entries = sorted(entries, key=email_entry_sort_key)
     lines = [
         "Products Reviews Update",
         "",
         f"Recipient: {recipient}",
         f"Check time: {now} ({timezone_name})",
-        f"Products in alert: {len(entries)}",
+        f"Products in alert: {len(sorted_entries)}",
         "",
     ]
-    if not entries:
+    if not sorted_entries:
         lines.extend([
             "No new bad reviews or score alerts detected.",
             "",
         ])
-    for index, entry in enumerate(entries, start=1):
+    for index, entry in enumerate(sorted_entries, start=1):
         summary = entry["summary"]
         lines.extend([
             f"{index}. {summary['product']}",
