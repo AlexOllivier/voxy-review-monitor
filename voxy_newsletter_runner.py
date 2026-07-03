@@ -165,18 +165,33 @@ def centered_update_google_sheet_dashboard(sheet_url, summaries):
         return
     spreadsheet = client.open_by_url(sheet_url)
     dashboard = spreadsheet.worksheet("Dashboard")
-    dashboard.format("A:Q", {
+    dashboard.format("A:M", {
         "horizontalAlignment": "CENTER",
         "verticalAlignment": "MIDDLE",
         "wrapStrategy": "WRAP",
     })
-    dashboard.format("A7:Q7", {
+    dashboard.format("A1:B5", {
+        "horizontalAlignment": "CENTER",
+        "verticalAlignment": "MIDDLE",
+        "textFormat": {
+            "bold": True,
+            "foregroundColor": {"red": 0.05, "green": 0.08, "blue": 0.16},
+        },
+        "backgroundColor": {"red": 0.92, "green": 0.98, "blue": 0.96},
+    })
+    dashboard.format("A7:M7", {
         "horizontalAlignment": "CENTER",
         "textFormat": {
             "bold": True,
             "foregroundColor": {"red": 0, "green": 0, "blue": 0},
         },
         "backgroundColor": {"red": 0.91, "green": 0.94, "blue": 0.98},
+    })
+    dashboard.format("F:J", {
+        "horizontalAlignment": "CENTER",
+        "textFormat": {
+            "bold": True,
+        },
     })
     print("Dashboard cells centered.")
 

@@ -243,16 +243,46 @@ def summarize_reviews(product, reviews):
     return summary
 
 
+def dashboard_platform_score(item):
+    score = item.get("official_score")
+    if score is None:
+        score = item.get("global_score")
+    return f"{score}/5" if score is not None else "N/A"
+
+
+def dashboard_risk_signal(item):
+    if item.get("status") == "ERROR":
+        return "Technical check"
+    if item.get("alert"):
+        return "Score alert"
+    if item.get("critical_review_count", 0) > 0:
+        return "Critical reviews"
+    if item.get("low_review_count", 0) > 0:
+        return "Low reviews"
+    return "Clear"
+
+
+def dashboard_main_issue(item):
+    themes = [theme for theme in item.get("themes", []) if theme]
+    if themes:
+        return ", ".join(themes[:2])
+    if item.get("critical_review_count", 0) > 0:
+        return "Critical customer experience issue"
+    if item.get("low_review_count", 0) > 0:
+        return "Recent low-rated feedback"
+    return "No issue detected"
+
+
 def google_rows_for_dashboard(summaries):
     global_summary = base.build_global_synthesis(summaries)
     rows = [
         ["Voxy weekly alert dashboard", ""],
         ["Products checked", global_summary["product_count"]],
         ["Average score", global_summary["average_score"] if global_summary["average_score"] is not None else "N/A"],
-        ["Low reviews", global_summary["low_reviews"]],
+        ["Products needing attention", sum(1 for item in summaries if item.get("alert") or item.get("low_review_count", 0) or item.get("critical_review_count", 0))],
         ["Critical reviews", global_summary["critical_reviews"]],
         [],
-        ["Product", "Country", "City", "Owner", "Priority", "Status", "Trend", "Global score", "Official score", "Official reviews", "Voxy sample score", "Voxy sample reviews", "Low reviews", "Critical reviews", "Main issue", "Concrete action", "URL"],
+        ["Product", "Country", "City", "Owner", "Priority", "Health", "Trend", "Platform score", "Critical reviews", "Risk signal", "Main issue", "Recommended action", "URL"],
     ]
     for item in summaries:
         rows.append([
@@ -263,14 +293,10 @@ def google_rows_for_dashboard(summaries):
             item.get("priority", ""),
             base.product_health_with_icon(item),
             base.trend_with_arrow(item),
-            item["global_score"] if item["global_score"] is not None else "N/A",
-            item.get("official_score") if item.get("official_score") is not None else "N/A",
-            item.get("official_review_count") if item.get("official_review_count") is not None else "N/A",
-            item.get("detected_score") if item.get("detected_score") is not None else "N/A",
-            item.get("detected_review_count", 0),
-            item["low_review_count"],
+            dashboard_platform_score(item),
             item["critical_review_count"],
-            ", ".join(item.get("themes", [])[:2]) or "No issue detected",
+            dashboard_risk_signal(item),
+            dashboard_main_issue(item),
             (item.get("concrete_actions") or item.get("suggestions") or ["No action needed"])[0],
             item["url"],
         ])
@@ -283,7 +309,7 @@ def update_google_sheet_dashboard(sheet_url, summaries):
         raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON is required to update the shared Google Sheet dashboard.")
     spreadsheet = client.open_by_url(sheet_url)
     base.annotate_trends_from_history(spreadsheet, summaries)
-    dashboard = base.get_or_create_worksheet(spreadsheet, "Dashboard", rows=max(100, len(summaries) + 10), cols=17)
+    dashboard = base.get_or_create_worksheet(spreadsheet, "Dashboard", rows=max(100, len(summaries) + 10), cols=13)
     dashboard.clear()
     dashboard.update(base.rectangularize_rows(google_rows_for_dashboard(summaries)), value_input_option="USER_ENTERED")
     dashboard.freeze(rows=1)
