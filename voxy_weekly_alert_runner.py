@@ -250,6 +250,15 @@ def dashboard_platform_score(item):
     return f"{score}/5" if score is not None else "N/A"
 
 
+def dashboard_review_number(item):
+    review_count = item.get("official_review_count")
+    if review_count is None:
+        review_count = item.get("review_count")
+    if review_count is None:
+        review_count = item.get("detected_review_count")
+    return review_count if review_count is not None else "N/A"
+
+
 def dashboard_risk_signal(item):
     if item.get("status") == "ERROR":
         return "Technical check"
@@ -282,7 +291,7 @@ def google_rows_for_dashboard(summaries):
         ["Products needing attention", sum(1 for item in summaries if item.get("alert") or item.get("low_review_count", 0) or item.get("critical_review_count", 0))],
         ["Critical reviews", global_summary["critical_reviews"]],
         [],
-        ["Product", "Country", "City", "Owner", "Priority", "Health", "Trend", "Platform score", "Critical reviews", "Risk signal", "Main issue", "Recommended action", "URL"],
+        ["Product", "Country", "City", "Owner", "Health", "Platform score", "Review number", "Risk signal", "Main issue", "Recommended action"],
     ]
     for item in summaries:
         rows.append([
@@ -290,15 +299,12 @@ def google_rows_for_dashboard(summaries):
             item.get("country", ""),
             item.get("city", ""),
             item.get("owner", ""),
-            item.get("priority", ""),
             base.product_health_with_icon(item),
-            base.trend_with_arrow(item),
             dashboard_platform_score(item),
-            item["critical_review_count"],
+            dashboard_review_number(item),
             dashboard_risk_signal(item),
             dashboard_main_issue(item),
             (item.get("concrete_actions") or item.get("suggestions") or ["No action needed"])[0],
-            item["url"],
         ])
     return rows
 
@@ -309,7 +315,7 @@ def update_google_sheet_dashboard(sheet_url, summaries):
         raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON is required to update the shared Google Sheet dashboard.")
     spreadsheet = client.open_by_url(sheet_url)
     base.annotate_trends_from_history(spreadsheet, summaries)
-    dashboard = base.get_or_create_worksheet(spreadsheet, "Dashboard", rows=max(100, len(summaries) + 10), cols=13)
+    dashboard = base.get_or_create_worksheet(spreadsheet, "Dashboard", rows=max(100, len(summaries) + 10), cols=10)
     dashboard.clear()
     dashboard.update(base.rectangularize_rows(google_rows_for_dashboard(summaries)), value_input_option="USER_ENTERED")
     dashboard.freeze(rows=1)

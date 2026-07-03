@@ -165,7 +165,7 @@ def centered_update_google_sheet_dashboard(sheet_url, summaries):
         return
     spreadsheet = client.open_by_url(sheet_url)
     dashboard = spreadsheet.worksheet("Dashboard")
-    dashboard.format("A:M", {
+    dashboard.format("A:J", {
         "horizontalAlignment": "CENTER",
         "verticalAlignment": "MIDDLE",
         "wrapStrategy": "WRAP",
@@ -179,7 +179,7 @@ def centered_update_google_sheet_dashboard(sheet_url, summaries):
         },
         "backgroundColor": {"red": 0.92, "green": 0.98, "blue": 0.96},
     })
-    dashboard.format("A7:M7", {
+    dashboard.format("A7:J7", {
         "horizontalAlignment": "CENTER",
         "textFormat": {
             "bold": True,
@@ -187,7 +187,7 @@ def centered_update_google_sheet_dashboard(sheet_url, summaries):
         },
         "backgroundColor": {"red": 0.91, "green": 0.94, "blue": 0.98},
     })
-    dashboard.format("F:J", {
+    dashboard.format("E:H", {
         "horizontalAlignment": "CENTER",
         "textFormat": {
             "bold": True,
