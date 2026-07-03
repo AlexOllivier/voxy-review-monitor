@@ -10,6 +10,7 @@ import voxy_weekly_alert_runner as runner
 
 
 ORIGINAL_UPDATE_GOOGLE_SHEET_DASHBOARD = runner.update_google_sheet_dashboard
+DASHBOARD_URL = "https://docs.google.com/spreadsheets/d/1XC_qHi4iPQeU9ashkwwaspw2tpVFWD-hWSTB8YuVy7A/edit?usp=sharing"
 
 
 def line_to_html(line: str) -> str:
@@ -110,6 +111,13 @@ def newsletter_html(plain_body: str) -> str:
               <div style="display:inline-block;background:#e7fff7;color:#007f63;border:1px solid #b8f3de;border-radius:999px;padding:8px 16px;font-size:14px;font-weight:500;margin-top:12px;text-align:center;">{product_count} product(s) remaining</div>
               <h1 style="margin:20px 0 10px;color:#101828;font-size:30px;font-weight:600;line-height:1.25;text-align:center;letter-spacing:0;">{title}</h1>
               <div style="color:#667085;font-size:14px;line-height:1.5;text-align:center;white-space:nowrap;">Weekly product review monitoring focused on platform scores, low reviews, and concrete actions.</div>
+              <table role="presentation" cellpadding="0" cellspacing="0" align="center" style="margin:18px auto 0;">
+                <tr>
+                  <td align="center" bgcolor="#22316f" style="border-radius:999px;">
+                    <a href="{DASHBOARD_URL}" style="display:inline-block;padding:12px 22px;color:#ffffff;font-size:14px;font-weight:600;text-decoration:none;border-radius:999px;">Open dashboard</a>
+                  </td>
+                </tr>
+              </table>
             </td>
           </tr>
           <tr>
