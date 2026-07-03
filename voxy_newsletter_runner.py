@@ -11,7 +11,7 @@ import voxy_weekly_alert_runner as runner
 
 ORIGINAL_UPDATE_GOOGLE_SHEET_DASHBOARD = runner.update_google_sheet_dashboard
 DASHBOARD_URL = "https://docs.google.com/spreadsheets/d/1XC_qHi4iPQeU9ashkwwaspw2tpVFWD-hWSTB8YuVy7A/edit?usp=sharing"
-DASHBOARD_COLUMN_WIDTHS = [360, 95, 120, 165, 105, 125, 125, 145, 190, 380]
+DASHBOARD_COLUMN_WIDTHS = [360, 95, 120, 165, 120, 105, 125, 125, 145, 190, 380]
 
 
 def line_to_html(line: str) -> str:
@@ -204,8 +204,8 @@ def centered_update_google_sheet_dashboard(sheet_url, summaries):
         return
     spreadsheet = client.open_by_url(sheet_url)
     dashboard = spreadsheet.worksheet("Dashboard")
-    dashboard.resize(rows=max(100, len(summaries) + 10), cols=10)
-    dashboard.format("A:J", {
+    dashboard.resize(rows=max(100, len(summaries) + 10), cols=11)
+    dashboard.format("A:K", {
         "horizontalAlignment": "CENTER",
         "verticalAlignment": "MIDDLE",
         "wrapStrategy": "WRAP",
@@ -219,7 +219,7 @@ def centered_update_google_sheet_dashboard(sheet_url, summaries):
         },
         "backgroundColor": {"red": 0.92, "green": 0.98, "blue": 0.96},
     })
-    dashboard.format("A7:J7", {
+    dashboard.format("A7:K7", {
         "horizontalAlignment": "CENTER",
         "textFormat": {
             "bold": True,
@@ -227,14 +227,14 @@ def centered_update_google_sheet_dashboard(sheet_url, summaries):
         },
         "backgroundColor": {"red": 0.91, "green": 0.94, "blue": 0.98},
     })
-    dashboard.format("E:H", {
+    dashboard.format("F:I", {
         "horizontalAlignment": "CENTER",
         "textFormat": {
             "bold": True,
             "foregroundColor": {"red": 0, "green": 0, "blue": 0},
         },
     })
-    dashboard.format("E7:H7", {
+    dashboard.format("F7:I7", {
         "horizontalAlignment": "CENTER",
         "textFormat": {
             "bold": True,

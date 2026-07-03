@@ -309,7 +309,7 @@ def google_rows_for_dashboard(summaries):
         ["Products needing attention", sum(1 for item in summaries if item.get("alert") or item.get("low_review_count", 0) or item.get("critical_review_count", 0))],
         ["Critical reviews", global_summary["critical_reviews"]],
         [],
-        ["Product", "Country", "City", "Owner", "Health", "Platform score", "Review number", "Risk signal", "Main issue", "Recommended action"],
+        ["Product", "Country", "City", "Owner", "Platform", "Health", "Platform score", "Review number", "Risk signal", "Main issue", "Recommended action"],
     ]
     for item in summaries:
         rows.append([
@@ -317,6 +317,7 @@ def google_rows_for_dashboard(summaries):
             item.get("country", ""),
             item.get("city", ""),
             item.get("owner", ""),
+            item.get("platform", ""),
             base.product_health_with_icon(item),
             dashboard_platform_score(item),
             dashboard_review_number(item),
@@ -333,8 +334,8 @@ def update_google_sheet_dashboard(sheet_url, summaries):
         raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON is required to update the shared Google Sheet dashboard.")
     spreadsheet = client.open_by_url(sheet_url)
     base.annotate_trends_from_history(spreadsheet, summaries)
-    dashboard = base.get_or_create_worksheet(spreadsheet, "Dashboard", rows=max(100, len(summaries) + 10), cols=10)
-    dashboard.resize(rows=max(100, len(summaries) + 10), cols=10)
+    dashboard = base.get_or_create_worksheet(spreadsheet, "Dashboard", rows=max(100, len(summaries) + 10), cols=11)
+    dashboard.resize(rows=max(100, len(summaries) + 10), cols=11)
     dashboard.clear()
     dashboard.update(base.rectangularize_rows(google_rows_for_dashboard(summaries)), value_input_option="USER_ENTERED")
     dashboard.freeze(rows=7, cols=1)
