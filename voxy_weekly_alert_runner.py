@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -13,6 +14,26 @@ import voxy_review_monitor as base
 
 
 OFFICIAL_RATING_CACHE = {}
+HISTORY_HEADERS = [
+    "Run timestamp",
+    "Product",
+    "Country",
+    "City",
+    "Owner",
+    "Platform",
+    "Reviews detected",
+    "Global score",
+    "Score change %",
+    "Trend",
+    "Low reviews",
+    "Critical reviews",
+    "Review rating",
+    "Review author",
+    "Review date",
+    "Review text EN",
+    "Status",
+    "URL",
+]
 
 
 def first_number(value):
@@ -243,6 +264,87 @@ def summarize_reviews(product, reviews):
     return summary
 
 
+def plain_ascii_text(value, max_chars=900):
+    text = base.normalize_text(str(value or ""))
+    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+    text = re.sub(r"[^A-Za-z0-9 .,;:!?()'\"/@&%+-]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:max_chars]
+
+
+def review_text_in_english(review):
+    original = plain_ascii_text(review.text)
+    if not original:
+        return "Review text not available."
+    translated = base.translate_to_english(original)
+    if translated and not translated.lower().startswith("translation unavailable"):
+        return plain_ascii_text(translated)
+    return original
+
+
+def annotate_score_evolution_from_history(spreadsheet, summaries):
+    previous_scores = base.latest_scores_from_history(spreadsheet)
+    for summary in summaries:
+        current_score = summary.get("global_score")
+        previous_score = previous_scores.get(summary["product"])
+        label, delta = base.trend_label(current_score, previous_score)
+        summary["trend"] = label
+        summary["trend_delta"] = delta
+        if current_score is None:
+            summary["score_change_percent"] = "No score"
+        elif previous_score is None:
+            summary["score_change_percent"] = "No history"
+        elif previous_score == 0:
+            summary["score_change_percent"] = "N/A"
+        else:
+            change = ((current_score - previous_score) / previous_score) * 100
+            sign = "+" if change > 0 else ""
+            summary["score_change_percent"] = f"{sign}{change:.1f}%"
+
+
+def append_history_rows(spreadsheet, summaries):
+    minimum_rows = max(100, len(summaries) * 4 + 20)
+    history = base.get_or_create_worksheet(spreadsheet, "History", rows=minimum_rows, cols=len(HISTORY_HEADERS))
+    history.resize(rows=max(history.row_count, minimum_rows), cols=len(HISTORY_HEADERS))
+    rows = history.get_all_values()
+    if not rows:
+        history.update([HISTORY_HEADERS], value_input_option="USER_ENTERED")
+    else:
+        current_headers = [header.strip() for header in rows[0]]
+        if current_headers != HISTORY_HEADERS:
+            history.update("A1:R1", [HISTORY_HEADERS], value_input_option="USER_ENTERED")
+
+    run_timestamp = datetime.now(ZoneInfo("Europe/Paris")).strftime("%Y-%m-%d %H:%M")
+    new_rows = []
+    for summary in summaries:
+        low_reviews = [review for review in summary.get("reviews", []) if review.rating <= 4]
+        if not low_reviews:
+            low_reviews = [None]
+        for review in low_reviews:
+            new_rows.append([
+                run_timestamp,
+                summary["product"],
+                summary.get("country", ""),
+                summary.get("city", ""),
+                summary.get("owner", ""),
+                summary.get("platform", ""),
+                summary.get("review_count", 0),
+                summary["global_score"] if summary["global_score"] is not None else "N/A",
+                summary.get("score_change_percent", "No history"),
+                summary.get("trend", "No history"),
+                summary.get("low_review_count", 0),
+                summary.get("critical_review_count", 0),
+                review.rating if review else "",
+                plain_ascii_text(base.clean_author_for_email(review)) if review else "",
+                plain_ascii_text(base.clean_date_for_email(review)) if review else "",
+                review_text_in_english(review) if review else "",
+                summary.get("status", "OK"),
+                summary["url"],
+            ])
+    if new_rows:
+        history.append_rows(new_rows, value_input_option="USER_ENTERED")
+
+
 def dashboard_platform_score(item):
     score = item.get("official_score")
     if score is None:
@@ -269,6 +371,10 @@ def dashboard_risk_signal(item):
     if item.get("low_review_count", 0) > 0:
         return "Low reviews"
     return "Clear"
+
+
+def dashboard_score_evolution(item):
+    return item.get("score_change_percent") or "No history"
 
 
 def dashboard_main_issue(item):
@@ -309,7 +415,7 @@ def google_rows_for_dashboard(summaries):
         ["Products needing attention", sum(1 for item in summaries if item.get("alert") or item.get("low_review_count", 0) or item.get("critical_review_count", 0))],
         ["Critical reviews", global_summary["critical_reviews"]],
         [],
-        ["Product", "Country", "City", "Owner", "Platform", "Health", "Platform score", "Review number", "Risk signal", "Main issue", "Recommended action"],
+        ["Product", "Country", "City", "Owner", "Platform", "Score evolution", "Platform score", "Review number", "Risk signal", "Main issue", "Recommended action"],
     ]
     for item in summaries:
         rows.append([
@@ -318,7 +424,7 @@ def google_rows_for_dashboard(summaries):
             item.get("city", ""),
             item.get("owner", ""),
             item.get("platform", ""),
-            base.product_health_with_icon(item),
+            dashboard_score_evolution(item),
             dashboard_platform_score(item),
             dashboard_review_number(item),
             dashboard_risk_signal(item),
@@ -333,13 +439,13 @@ def update_google_sheet_dashboard(sheet_url, summaries):
     if client is None:
         raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON is required to update the shared Google Sheet dashboard.")
     spreadsheet = client.open_by_url(sheet_url)
-    base.annotate_trends_from_history(spreadsheet, summaries)
+    annotate_score_evolution_from_history(spreadsheet, summaries)
     dashboard = base.get_or_create_worksheet(spreadsheet, "Dashboard", rows=max(100, len(summaries) + 10), cols=11)
     dashboard.resize(rows=max(100, len(summaries) + 10), cols=11)
     dashboard.clear()
     dashboard.update(base.rectangularize_rows(google_rows_for_dashboard(summaries)), value_input_option="USER_ENTERED")
     dashboard.freeze(rows=7, cols=1)
-    base.append_history_rows(spreadsheet, summaries)
+    append_history_rows(spreadsheet, summaries)
     print("Shared Google Sheet alert dashboard updated.")
 
 

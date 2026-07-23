@@ -11,7 +11,7 @@ import voxy_weekly_alert_runner as runner
 
 ORIGINAL_UPDATE_GOOGLE_SHEET_DASHBOARD = runner.update_google_sheet_dashboard
 DASHBOARD_URL = "https://docs.google.com/spreadsheets/d/1XC_qHi4iPQeU9ashkwwaspw2tpVFWD-hWSTB8YuVy7A/edit?usp=sharing"
-DASHBOARD_COLUMN_WIDTHS = [360, 95, 120, 165, 120, 105, 125, 125, 145, 190, 380]
+DASHBOARD_COLUMN_WIDTHS = [360, 95, 120, 165, 120, 135, 125, 125, 145, 190, 380]
 INDICATOR_COLORS = {
     "good": {"red": 0.84, "green": 0.96, "blue": 0.89},
     "clear": {"red": 0.84, "green": 0.96, "blue": 0.89},
@@ -178,6 +178,14 @@ def try_send_newsletter_email(recipients, subject, body):
 
 def indicator_color(value):
     normalized = str(value or "").lower()
+    if normalized.startswith("+"):
+        return {"red": 0.84, "green": 0.96, "blue": 0.89}
+    if normalized.startswith("-"):
+        return {"red": 1.0, "green": 0.84, "blue": 0.84}
+    if normalized in {"0.0%", "0%"}:
+        return {"red": 0.91, "green": 0.94, "blue": 0.98}
+    if "no history" in normalized or normalized in {"n/a", "no score"}:
+        return {"red": 0.94, "green": 0.96, "blue": 0.98}
     for key, color in INDICATOR_COLORS.items():
         if key in normalized:
             return color
@@ -238,9 +246,9 @@ def apply_dashboard_layout(spreadsheet, dashboard, summaries):
         }
     })
     for row_offset, summary in enumerate(summaries, start=7):
-        health = base.product_health_with_icon(summary)
+        score_evolution = runner.dashboard_score_evolution(summary)
         risk_signal = runner.dashboard_risk_signal(summary)
-        requests.append(indicator_format_request(dashboard, row_offset, 5, health))
+        requests.append(indicator_format_request(dashboard, row_offset, 5, score_evolution))
         requests.append(indicator_format_request(dashboard, row_offset, 8, risk_signal))
     spreadsheet.batch_update({"requests": requests})
 
