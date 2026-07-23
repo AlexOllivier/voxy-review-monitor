@@ -24,7 +24,6 @@ HISTORY_HEADERS = [
     "Platform",
     "URL",
     "Reviews detected",
-    "Review change vs previous week",
     "Global score",
     "Score change %",
     "Trend",
@@ -548,7 +547,6 @@ def annotate_score_evolution_from_history(spreadsheet, summaries):
             summary["error"] = "Missing score or review count for this URL."
         previous = previous_metrics.get(summary["product"])
         previous_score = previous["score"] if previous else None
-        previous_reviews = previous["review_count"] if previous else None
         label, delta = base.trend_label(current_score, previous_score)
         summary["trend"] = label
         summary["trend_delta"] = delta
@@ -562,14 +560,6 @@ def annotate_score_evolution_from_history(spreadsheet, summaries):
             change = ((current_score - previous_score) / previous_score) * 100
             sign = "+" if change > 0 else ""
             summary["score_change_percent"] = f"{sign}{change:.1f}%"
-        if current_reviews is None:
-            summary["review_change_count"] = "Check required"
-        elif previous_reviews is None:
-            summary["review_change_count"] = "No history"
-        else:
-            change = current_reviews - previous_reviews
-            sign = "+" if change > 0 else ""
-            summary["review_change_count"] = f"{sign}{change}"
 
 
 def append_history_rows(spreadsheet, summaries):
@@ -592,7 +582,6 @@ def append_history_rows(spreadsheet, summaries):
             summary.get("platform", ""),
             summary["url"],
             current_review_count(summary) if current_review_count(summary) is not None else "Check required",
-            summary.get("review_change_count", "No history"),
             current_score_value(summary) if current_score_value(summary) is not None else "Check required",
             summary.get("score_change_percent", "No history"),
             summary.get("trend", "No history"),
@@ -625,7 +614,6 @@ def append_history_rows(spreadsheet, summaries):
                 summary.get("platform", ""),
                 summary["url"],
                 current_review_count(summary) if current_review_count(summary) is not None else "Check required",
-                summary.get("review_change_count", "No history"),
                 current_score_value(summary) if current_score_value(summary) is not None else "Check required",
                 summary.get("score_change_percent", "No history"),
                 summary.get("trend", "No history"),
@@ -679,11 +667,6 @@ def dashboard_score_evolution(item):
     return "Check required" if str(value).lower() in {"no score", "score unavailable", "n/a"} else value
 
 
-def dashboard_review_evolution(item):
-    value = item.get("review_change_count") or "No history"
-    return "Check required" if str(value).lower() in {"reviews unavailable", "n/a"} else value
-
-
 def dashboard_main_issue(item):
     if item.get("main_issue"):
         return item["main_issue"]
@@ -724,7 +707,7 @@ def google_rows_for_dashboard(summaries):
         ["Products needing attention", sum(1 for item in summaries if item.get("alert") or item.get("low_review_count", 0) or item.get("critical_review_count", 0))],
         ["Critical reviews", global_summary["critical_reviews"]],
         [],
-        ["Product", "Country", "City", "Owner", "Platform", "Score evolution", "Platform score", "Review number", "Review evolution", "Risk signal", "Main issue", "Recommended action"],
+        ["Product", "Country", "City", "Owner", "Platform", "Score evolution", "Platform score", "Review number", "Risk signal", "Main issue", "Recommended action"],
     ]
     for item in summaries:
         rows.append([
@@ -736,7 +719,6 @@ def google_rows_for_dashboard(summaries):
             dashboard_score_evolution(item),
             dashboard_platform_score(item),
             dashboard_review_number(item),
-            dashboard_review_evolution(item),
             dashboard_risk_signal(item),
             dashboard_main_issue(item),
             item.get("recommended_action") or (item.get("concrete_actions") or item.get("suggestions") or ["No action needed"])[0],
@@ -750,8 +732,8 @@ def update_google_sheet_dashboard(sheet_url, summaries):
         raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON is required to update the shared Google Sheet dashboard.")
     spreadsheet = client.open_by_url(sheet_url)
     annotate_score_evolution_from_history(spreadsheet, summaries)
-    dashboard = base.get_or_create_worksheet(spreadsheet, "Dashboard", rows=max(100, len(summaries) + 10), cols=12)
-    dashboard.resize(rows=max(100, len(summaries) + 10), cols=12)
+    dashboard = base.get_or_create_worksheet(spreadsheet, "Dashboard", rows=max(100, len(summaries) + 10), cols=11)
+    dashboard.resize(rows=max(100, len(summaries) + 10), cols=11)
     dashboard.clear()
     dashboard.update(base.rectangularize_rows(google_rows_for_dashboard(summaries)), value_input_option="USER_ENTERED")
     dashboard.freeze(rows=7, cols=1)
@@ -866,7 +848,7 @@ def main():
             if skipped:
                 print(f"Skipped {skipped} review(s) dated before {local_today.isoformat()} ({args.timezone}).")
 
-        summary = summarize_reviews(product, current_reviews)
+        summary = summarize_reviews(product, reviews)
         summaries.append(summary)
         low_reviews = [
             review for review in current_reviews
