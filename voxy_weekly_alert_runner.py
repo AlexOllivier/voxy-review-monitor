@@ -5,7 +5,7 @@ import os
 import re
 import sys
 import unicodedata
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
@@ -22,6 +22,7 @@ HISTORY_HEADERS = [
     "Owner",
     "Platform",
     "Reviews detected",
+    "Review change vs previous week",
     "Global score",
     "Score change %",
     "Trend",
@@ -298,57 +299,147 @@ def history_needs_reset(rows):
     return False
 
 
-def prepared_history_worksheet(spreadsheet, summaries):
+def prepared_history_worksheet(spreadsheet, summaries, reset_incompatible=True):
     minimum_rows = history_minimum_rows(summaries)
     history = base.get_or_create_worksheet(spreadsheet, "History", rows=minimum_rows, cols=len(HISTORY_HEADERS))
     history.resize(rows=max(history.row_count, minimum_rows), cols=len(HISTORY_HEADERS))
     rows = history.get_all_values()
-    if history_needs_reset(rows):
+    if reset_incompatible and history_needs_reset(rows):
         history.clear()
         history.update([HISTORY_HEADERS], value_input_option="USER_ENTERED")
         rows = [HISTORY_HEADERS]
     return history, rows
 
 
-def latest_scores_from_history_rows(rows):
+def parse_history_timestamp(value):
+    text = str(value or "").strip()
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def current_score_value(summary):
+    for key in ("official_score", "global_score", "detected_score"):
+        score = summary.get(key)
+        if score is not None:
+            return score
+    return None
+
+
+def current_review_count(summary):
+    for key in ("official_review_count", "review_count", "detected_review_count"):
+        count = summary.get(key)
+        if count is not None:
+            return int(count)
+    return None
+
+
+def metric_from_history_row(row, headers):
+    try:
+        product_index = headers.index("product")
+    except ValueError:
+        return None
+    if len(row) <= product_index:
+        return None
+    product = row[product_index].strip()
+    if not product:
+        return None
+
+    try:
+        review_index = headers.index("reviews detected")
+        score_index = headers.index("global score")
+        if len(row) > max(review_index, score_index):
+            review_count = base.parse_optional_float(row[review_index])
+            score = base.parse_optional_float(row[score_index])
+            if review_count is not None and score is not None:
+                return product, int(review_count), score
+    except ValueError:
+        pass
+
+    numeric_cells = []
+    for index, cell in enumerate(row[product_index + 1:], start=product_index + 1):
+        number = base.parse_optional_float(cell)
+        if number is not None:
+            numeric_cells.append((index, number))
+    for index, number in numeric_cells:
+        if number > 5:
+            score = next((candidate for candidate_index, candidate in numeric_cells if candidate_index > index and candidate <= 5), None)
+            if score is not None:
+                return product, int(number), score
+    return None
+
+
+def previous_week_metrics_from_history_rows(rows, now=None):
     latest = {}
     if len(rows) < 2:
         return latest
+    now = now or datetime.now(ZoneInfo("Europe/Paris"))
+    target_date = now.date() - timedelta(days=7)
+    target_iso_year, target_iso_week, _ = target_date.isocalendar()
     headers = [header.strip().lower() for header in rows[0]]
     try:
-        product_index = headers.index("product")
-        score_index = headers.index("global score")
+        timestamp_index = headers.index("run timestamp")
     except ValueError:
         return latest
     for row in rows[1:]:
-        if len(row) <= max(product_index, score_index):
+        if len(row) <= timestamp_index:
             continue
-        product = row[product_index].strip()
-        score = base.parse_optional_float(row[score_index])
-        if product and score is not None:
-            latest[product] = score
+        timestamp = parse_history_timestamp(row[timestamp_index])
+        if timestamp is None:
+            continue
+        iso_year, iso_week, _ = timestamp.date().isocalendar()
+        if iso_year != target_iso_year or iso_week != target_iso_week:
+            continue
+        metric = metric_from_history_row(row, headers)
+        if metric is None:
+            continue
+        product, review_count, score = metric
+        current = latest.get(product)
+        if current is None or timestamp > current["timestamp"]:
+            latest[product] = {
+                "timestamp": timestamp,
+                "score": score,
+                "review_count": review_count,
+            }
     return latest
 
 
 def annotate_score_evolution_from_history(spreadsheet, summaries):
-    _, rows = prepared_history_worksheet(spreadsheet, summaries)
-    previous_scores = latest_scores_from_history_rows(rows)
+    _, rows = prepared_history_worksheet(spreadsheet, summaries, reset_incompatible=False)
+    previous_metrics = previous_week_metrics_from_history_rows(rows)
     for summary in summaries:
-        current_score = summary.get("global_score")
-        previous_score = previous_scores.get(summary["product"])
+        current_score = current_score_value(summary)
+        current_reviews = current_review_count(summary)
+        if current_score is None or current_reviews is None:
+            summary["status"] = "TECHNICAL_CHECK"
+            summary["error"] = "Missing score or review count for this URL."
+        previous = previous_metrics.get(summary["product"])
+        previous_score = previous["score"] if previous else None
+        previous_reviews = previous["review_count"] if previous else None
         label, delta = base.trend_label(current_score, previous_score)
         summary["trend"] = label
         summary["trend_delta"] = delta
         if current_score is None:
-            summary["score_change_percent"] = "No score"
+            summary["score_change_percent"] = "Check required"
         elif previous_score is None:
             summary["score_change_percent"] = "No history"
         elif previous_score == 0:
-            summary["score_change_percent"] = "N/A"
+            summary["score_change_percent"] = "Check required"
         else:
             change = ((current_score - previous_score) / previous_score) * 100
             sign = "+" if change > 0 else ""
             summary["score_change_percent"] = f"{sign}{change:.1f}%"
+        if current_reviews is None:
+            summary["review_change_count"] = "Check required"
+        elif previous_reviews is None:
+            summary["review_change_count"] = "No history"
+        else:
+            change = current_reviews - previous_reviews
+            sign = "+" if change > 0 else ""
+            summary["review_change_count"] = f"{sign}{change}"
 
 
 def append_history_rows(spreadsheet, summaries):
@@ -367,8 +458,9 @@ def append_history_rows(spreadsheet, summaries):
                 summary.get("city", ""),
                 summary.get("owner", ""),
                 summary.get("platform", ""),
-                summary.get("review_count", 0),
-                summary["global_score"] if summary["global_score"] is not None else "N/A",
+                current_review_count(summary) if current_review_count(summary) is not None else "Check required",
+                summary.get("review_change_count", "No history"),
+                current_score_value(summary) if current_score_value(summary) is not None else "Check required",
                 summary.get("score_change_percent", "No history"),
                 summary.get("trend", "No history"),
                 summary.get("low_review_count", 0),
@@ -385,10 +477,8 @@ def append_history_rows(spreadsheet, summaries):
 
 
 def dashboard_platform_score(item):
-    score = item.get("official_score")
-    if score is None:
-        score = item.get("global_score")
-    return f"{score}/5" if score is not None else "N/A"
+    score = current_score_value(item)
+    return f"{score}/5" if score is not None else "Check required"
 
 
 def dashboard_review_number(item):
@@ -397,11 +487,13 @@ def dashboard_review_number(item):
         review_count = item.get("review_count")
     if review_count is None:
         review_count = item.get("detected_review_count")
-    return review_count if review_count is not None else "N/A"
+    return review_count if review_count is not None else "Check required"
 
 
 def dashboard_risk_signal(item):
-    if item.get("status") == "ERROR":
+    if item.get("status") in {"ERROR", "TECHNICAL_CHECK"}:
+        return "Technical check"
+    if current_score_value(item) is None or current_review_count(item) is None:
         return "Technical check"
     if item.get("alert"):
         return "Score alert"
@@ -413,7 +505,13 @@ def dashboard_risk_signal(item):
 
 
 def dashboard_score_evolution(item):
-    return item.get("score_change_percent") or "No history"
+    value = item.get("score_change_percent") or "No history"
+    return "Check required" if str(value).lower() in {"no score", "score unavailable", "n/a"} else value
+
+
+def dashboard_review_evolution(item):
+    value = item.get("review_change_count") or "No history"
+    return "Check required" if str(value).lower() in {"reviews unavailable", "n/a"} else value
 
 
 def dashboard_main_issue(item):
@@ -450,11 +548,11 @@ def google_rows_for_dashboard(summaries):
     rows = [
         ["Voxy weekly alert dashboard", ""],
         ["Products checked", global_summary["product_count"]],
-        ["Average score", global_summary["average_score"] if global_summary["average_score"] is not None else "N/A"],
+        ["Average score", global_summary["average_score"] if global_summary["average_score"] is not None else "Check required"],
         ["Products needing attention", sum(1 for item in summaries if item.get("alert") or item.get("low_review_count", 0) or item.get("critical_review_count", 0))],
         ["Critical reviews", global_summary["critical_reviews"]],
         [],
-        ["Product", "Country", "City", "Owner", "Platform", "Score evolution", "Platform score", "Review number", "Risk signal", "Main issue", "Recommended action"],
+        ["Product", "Country", "City", "Owner", "Platform", "Score evolution", "Platform score", "Review number", "Review evolution", "Risk signal", "Main issue", "Recommended action"],
     ]
     for item in summaries:
         rows.append([
@@ -466,6 +564,7 @@ def google_rows_for_dashboard(summaries):
             dashboard_score_evolution(item),
             dashboard_platform_score(item),
             dashboard_review_number(item),
+            dashboard_review_evolution(item),
             dashboard_risk_signal(item),
             dashboard_main_issue(item),
             (item.get("concrete_actions") or item.get("suggestions") or ["No action needed"])[0],
@@ -479,8 +578,8 @@ def update_google_sheet_dashboard(sheet_url, summaries):
         raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON is required to update the shared Google Sheet dashboard.")
     spreadsheet = client.open_by_url(sheet_url)
     annotate_score_evolution_from_history(spreadsheet, summaries)
-    dashboard = base.get_or_create_worksheet(spreadsheet, "Dashboard", rows=max(100, len(summaries) + 10), cols=11)
-    dashboard.resize(rows=max(100, len(summaries) + 10), cols=11)
+    dashboard = base.get_or_create_worksheet(spreadsheet, "Dashboard", rows=max(100, len(summaries) + 10), cols=12)
+    dashboard.resize(rows=max(100, len(summaries) + 10), cols=12)
     dashboard.clear()
     dashboard.update(base.rectangularize_rows(google_rows_for_dashboard(summaries)), value_input_option="USER_ENTERED")
     dashboard.freeze(rows=7, cols=1)
@@ -508,16 +607,16 @@ def build_summary_email_body(recipient, entries, timezone_name):
         summary = entry["summary"]
         lines.extend([
             f"{index}. {summary['product']}",
-            f"Country: {summary.get('country') or 'N/A'}",
-            f"City: {summary.get('city') or 'N/A'}",
-            f"Owner: {summary.get('owner') or 'N/A'}",
+            f"Country: {summary.get('country') or 'Not provided'}",
+            f"City: {summary.get('city') or 'Not provided'}",
+            f"Owner: {summary.get('owner') or 'Not provided'}",
             f"Priority: {summary.get('priority') or 'Medium'}",
-            f"Platform: {summary.get('platform') or 'N/A'}",
+            f"Platform: {summary.get('platform') or 'Not provided'}",
             f"Status: {base.product_health_with_icon(summary)}",
             f"Trend: {base.trend_with_arrow(summary)}",
-            f"Score: {summary['global_score'] if summary['global_score'] is not None else 'N/A'}/5",
-            *([f"Platform score: {summary.get('official_score')}/5 from {summary.get('official_review_count') or 'N/A'} reviews"] if summary.get("official_score") is not None else []),
-            f"Voxy sample: {summary.get('detected_score') if summary.get('detected_score') is not None else 'N/A'}/5 from {summary.get('detected_review_count') or 0} detected reviews",
+            f"Score: {current_score_value(summary) if current_score_value(summary) is not None else 'Check required'}/5",
+            *([f"Platform score: {summary.get('official_score')}/5 from {summary.get('official_review_count') or 'Check required'} reviews"] if summary.get("official_score") is not None else []),
+            f"Voxy sample: {summary.get('detected_score') if summary.get('detected_score') is not None else 'Check required'}/5 from {summary.get('detected_review_count') or 0} detected reviews",
             f"Low reviews: {summary['low_review_count']}",
             f"Critical reviews < 3: {summary['critical_review_count']}",
             f"Action: {(summary.get('concrete_actions') or summary.get('suggestions') or ['Review product feedback'])[0]}",
