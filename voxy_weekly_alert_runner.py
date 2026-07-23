@@ -16,25 +16,72 @@ import voxy_review_monitor as base
 OFFICIAL_RATING_CACHE = {}
 HISTORY_HEADERS = [
     "Run timestamp",
+    "Row type",
     "Product",
     "Country",
     "City",
     "Owner",
     "Platform",
+    "URL",
     "Reviews detected",
     "Review change vs previous week",
     "Global score",
     "Score change %",
     "Trend",
+    "Risk signal",
+    "Main issue",
+    "Recommended action",
     "Low reviews",
     "Critical reviews",
     "Review rating",
     "Review author",
     "Review date",
     "Review text EN",
+    "Review source",
+    "Review ID",
     "Status",
-    "URL",
 ]
+
+ISSUE_SIGNALS = {
+    "Booking / access / ticketing": [
+        "ticket", "tickets", "entry", "entrance", "access", "voucher", "scan", "barcode", "qr",
+        "booking", "reservation", "billet", "entree", "acces", "file", "queue",
+    ],
+    "Meeting point / timing": [
+        "meeting point", "meet", "location", "address", "late", "delay", "waiting", "wait",
+        "start time", "time slot", "retard", "attente", "horaire", "rendez",
+    ],
+    "Guide / staff experience": [
+        "guide", "staff", "rude", "unfriendly", "friendly", "explanation", "explained", "group",
+        "fast", "slow", "boring", "personnel", "explication", "groupe",
+    ],
+    "Audio guide / app / language": [
+        "audio", "audioguide", "app", "application", "download", "headphone", "language",
+        "translation", "anglais", "francais", "espagnol",
+    ],
+    "Value for money": [
+        "expensive", "price", "money", "value", "worth", "overpriced", "refund", "remboursement",
+        "prix", "cher", "argent",
+    ],
+    "Cancellation / availability": [
+        "cancel", "cancelled", "canceled", "cancellation", "unavailable", "closed", "annule",
+        "annulation", "ferme",
+    ],
+    "Experience quality": [
+        "disappointed", "disappointing", "bad", "poor", "terrible", "awful", "not worth",
+        "waste", "confusing", "crowded", "decu", "decevant", "mauvais",
+    ],
+}
+
+ISSUE_ACTIONS = {
+    "Booking / access / ticketing": "Audit the ticket, voucher, QR code, and entrance flow on the OTA page, then fix the exact access step that creates friction.",
+    "Meeting point / timing": "Check the meeting point, address, start-time instructions, and queue handling against the customer journey described in the review.",
+    "Guide / staff experience": "Review guide/staff briefing, tour pace, group management, and service tone for this product before replying to the customer.",
+    "Audio guide / app / language": "Test the audio/app instructions from the customer perspective and clarify download, language, and on-site usage steps.",
+    "Value for money": "Compare the advertised promise with the delivered experience and adjust listing copy, pricing expectations, or goodwill response if needed.",
+    "Cancellation / availability": "Audit cancellation, closure, and availability communication so customers receive clear timing, reason, and next-step options.",
+    "Experience quality": "Read the lowest-rated reviews and identify the concrete operational gap that made the experience feel poor.",
+}
 
 
 def first_number(value):
@@ -176,9 +223,58 @@ def concrete_action_for_review(review):
     return f"{action} Evidence: {review.rating}/5 - {text}"
 
 
+def issue_signal_scores(reviews):
+    scores = {}
+    evidence = {}
+    for review in reviews:
+        text = plain_ascii_text(review.text, max_chars=1600).lower()
+        if not text:
+            continue
+        weight = max(1, int(6 - review.rating))
+        for issue, keywords in ISSUE_SIGNALS.items():
+            hits = sum(1 for keyword in keywords if keyword in text)
+            if hits:
+                scores[issue] = scores.get(issue, 0) + hits * weight
+                evidence.setdefault(issue, []).append(review)
+    return scores, evidence
+
+
+def analyze_review_wording(reviews):
+    low_reviews = [review for review in reviews if review.rating <= 4]
+    if not low_reviews:
+        return {
+            "main_issue": "No issue detected",
+            "recommended_action": "No action needed",
+            "issue_evidence": "",
+        }
+    scores, evidence = issue_signal_scores(low_reviews)
+    if scores:
+        main_issue = sorted(scores.items(), key=lambda item: (-item[1], item[0]))[0][0]
+        selected_reviews = sorted(evidence.get(main_issue, []), key=lambda item: item.rating)[:2]
+    else:
+        main_issue = "Experience quality"
+        selected_reviews = sorted(low_reviews, key=lambda item: item.rating)[:2]
+
+    snippets = []
+    for review in selected_reviews:
+        text = review_text_in_english(review)
+        snippets.append(f"{review.rating}/5: {text[:180]}")
+    return {
+        "main_issue": main_issue,
+        "recommended_action": ISSUE_ACTIONS.get(main_issue, ISSUE_ACTIONS["Experience quality"]),
+        "issue_evidence": " | ".join(snippets),
+    }
+
+
 def build_concrete_actions(product, reviews, limit=3):
     low_reviews = [review for review in reviews if review.rating <= product.threshold]
-    return [concrete_action_for_review(review) for review in sorted(low_reviews, key=lambda item: item.rating)[:limit]]
+    wording = analyze_review_wording(low_reviews)
+    actions = []
+    if wording["recommended_action"] != "No action needed":
+        evidence = f" Evidence: {wording['issue_evidence']}" if wording.get("issue_evidence") else ""
+        actions.append(f"{wording['recommended_action']}{evidence}")
+    actions.extend(concrete_action_for_review(review) for review in sorted(low_reviews, key=lambda item: item.rating)[:limit])
+    return actions[:limit]
 
 
 def products_from_rows(rows):
@@ -259,6 +355,10 @@ def summarize_reviews(product, reviews):
     summary["detected_score"] = detected_score
     summary["detected_review_count"] = detected_review_count
     summary["city"] = getattr(product, "city", "")
+    wording = analyze_review_wording(reviews)
+    summary["main_issue"] = wording["main_issue"]
+    summary["recommended_action"] = wording["recommended_action"]
+    summary["issue_evidence"] = wording["issue_evidence"]
     summary["concrete_actions"] = build_concrete_actions(product, reviews)
     if summary["concrete_actions"]:
         summary["suggestions"] = summary["concrete_actions"]
@@ -274,13 +374,13 @@ def plain_ascii_text(value, max_chars=900):
 
 
 def review_text_in_english(review):
-    original = plain_ascii_text(review.text)
-    if not original:
+    original = base.normalize_text(str(review.text or ""))
+    if not original.strip():
         return "Review text not available."
     translated = base.translate_to_english(original)
     if translated and not translated.lower().startswith("translation unavailable"):
         return plain_ascii_text(translated)
-    return original
+    return plain_ascii_text(original)
 
 
 def history_minimum_rows(summaries):
@@ -407,6 +507,36 @@ def previous_week_metrics_from_history_rows(rows, now=None):
     return latest
 
 
+def review_history_id(summary, review):
+    raw = "|".join([
+        str(summary.get("product", "")),
+        str(summary.get("url", "")),
+        str(review.rating),
+        base.clean_author_for_email(review),
+        base.clean_date_for_email(review),
+        base.normalize_text(review.text or "")[:500],
+    ])
+    return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()[:16]
+
+
+def existing_review_ids(rows):
+    if len(rows) < 2:
+        return set()
+    headers = [header.strip().lower() for header in rows[0]]
+    try:
+        row_type_index = headers.index("row type")
+        review_id_index = headers.index("review id")
+    except ValueError:
+        return set()
+    ids = set()
+    for row in rows[1:]:
+        if len(row) <= max(row_type_index, review_id_index):
+            continue
+        if row[row_type_index].strip().upper() == "LOW_REVIEW" and row[review_id_index].strip():
+            ids.add(row[review_id_index].strip())
+    return ids
+
+
 def annotate_score_evolution_from_history(spreadsheet, summaries):
     _, rows = prepared_history_worksheet(spreadsheet, summaries, reset_incompatible=False)
     previous_metrics = previous_week_metrics_from_history_rows(rows)
@@ -443,34 +573,74 @@ def annotate_score_evolution_from_history(spreadsheet, summaries):
 
 
 def append_history_rows(spreadsheet, summaries):
-    history, _ = prepared_history_worksheet(spreadsheet, summaries)
+    history, rows = prepared_history_worksheet(spreadsheet, summaries)
+    known_review_ids = existing_review_ids(rows)
     run_timestamp = datetime.now(ZoneInfo("Europe/Paris")).strftime("%Y-%m-%d %H:%M")
     new_rows = []
     for summary in summaries:
+        main_issue = dashboard_main_issue(summary)
+        recommended_action = (summary.get("recommended_action") or summary.get("concrete_actions") or summary.get("suggestions") or ["No action needed"])
+        if isinstance(recommended_action, list):
+            recommended_action = recommended_action[0]
+        new_rows.append([
+            run_timestamp,
+            "PRODUCT_SUMMARY",
+            summary["product"],
+            summary.get("country", ""),
+            summary.get("city", ""),
+            summary.get("owner", ""),
+            summary.get("platform", ""),
+            summary["url"],
+            current_review_count(summary) if current_review_count(summary) is not None else "Check required",
+            summary.get("review_change_count", "No history"),
+            current_score_value(summary) if current_score_value(summary) is not None else "Check required",
+            summary.get("score_change_percent", "No history"),
+            summary.get("trend", "No history"),
+            dashboard_risk_signal(summary),
+            main_issue,
+            recommended_action,
+            summary.get("low_review_count", 0),
+            summary.get("critical_review_count", 0),
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            summary.get("status", "OK"),
+        ])
         low_reviews = [review for review in summary.get("reviews", []) if review.rating <= 4]
-        if not low_reviews:
-            low_reviews = [None]
         for review in low_reviews:
+            review_id = review_history_id(summary, review)
+            if review_id in known_review_ids:
+                continue
+            known_review_ids.add(review_id)
             new_rows.append([
                 run_timestamp,
+                "LOW_REVIEW",
                 summary["product"],
                 summary.get("country", ""),
                 summary.get("city", ""),
                 summary.get("owner", ""),
                 summary.get("platform", ""),
+                summary["url"],
                 current_review_count(summary) if current_review_count(summary) is not None else "Check required",
                 summary.get("review_change_count", "No history"),
                 current_score_value(summary) if current_score_value(summary) is not None else "Check required",
                 summary.get("score_change_percent", "No history"),
                 summary.get("trend", "No history"),
+                dashboard_risk_signal(summary),
+                main_issue,
+                recommended_action,
                 summary.get("low_review_count", 0),
                 summary.get("critical_review_count", 0),
-                review.rating if review else "",
-                plain_ascii_text(base.clean_author_for_email(review)) if review else "",
-                plain_ascii_text(base.clean_date_for_email(review)) if review else "",
-                review_text_in_english(review) if review else "",
+                review.rating,
+                plain_ascii_text(base.clean_author_for_email(review)),
+                plain_ascii_text(base.clean_date_for_email(review)),
+                review_text_in_english(review),
+                plain_ascii_text(getattr(review, "source", "")),
+                review_id,
                 summary.get("status", "OK"),
-                summary["url"],
             ])
     if new_rows:
         history.append_rows(new_rows, value_input_option="USER_ENTERED")
@@ -515,6 +685,8 @@ def dashboard_review_evolution(item):
 
 
 def dashboard_main_issue(item):
+    if item.get("main_issue"):
+        return item["main_issue"]
     themes = [theme for theme in item.get("themes", []) if theme]
     if themes:
         return ", ".join(themes[:2])
@@ -567,7 +739,7 @@ def google_rows_for_dashboard(summaries):
             dashboard_review_evolution(item),
             dashboard_risk_signal(item),
             dashboard_main_issue(item),
-            (item.get("concrete_actions") or item.get("suggestions") or ["No action needed"])[0],
+            item.get("recommended_action") or (item.get("concrete_actions") or item.get("suggestions") or ["No action needed"])[0],
         ])
     return rows
 
