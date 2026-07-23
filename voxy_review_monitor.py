@@ -820,7 +820,7 @@ def dedupe_reviews(reviews: Iterable[Review]) -> list[Review]:
 
 def fetch_reviews(product: Product) -> list[Review]:
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
+        browser = playwright.chromium.launch(headless=True, args=["--no-sandbox"])
         page = browser.new_page(
             locale=product.language or "en",
             user_agent=(
@@ -838,24 +838,47 @@ def fetch_reviews(product: Product) -> list[Review]:
         page.wait_for_timeout(2500)
 
         click_labels = [
-            "reviews", "avis", "show more", "voir plus", "load more",
-            "read more", "more reviews", "all reviews", "see reviews",
-            "tous les avis", "afficher plus", "accept", "accepter",
-            "j'accepte", "allow all", "tout accepter"
+            "accept", "accepter", "j'accepte", "allow all", "tout accepter",
+            "reviews", "avis", "customer reviews", "see reviews", "all reviews",
+            "read reviews", "show more", "voir plus", "load more", "read more",
+            "more reviews", "tous les avis", "afficher plus"
         ]
         for label in click_labels:
-            for _ in range(2):
+            for _ in range(3):
                 try:
-                    page.get_by_text(re.compile(label, re.I)).first.click(timeout=1500)
+                    page.get_by_text(re.compile(label, re.I)).first.click(timeout=1800)
                     page.wait_for_timeout(1200)
                 except Exception:
                     break
 
-        for _ in range(8):
-            page.mouse.wheel(0, 3500)
+        previous_height = 0
+        stable_rounds = 0
+        for _ in range(18):
+            try:
+                height = page.evaluate("document.body.scrollHeight")
+            except Exception:
+                height = previous_height
+            page.mouse.wheel(0, 4200)
             page.wait_for_timeout(900)
+            for label in ["show more", "load more", "read more", "voir plus", "afficher plus", "more reviews", "tous les avis"]:
+                try:
+                    page.get_by_text(re.compile(label, re.I)).first.click(timeout=900)
+                    page.wait_for_timeout(800)
+                except Exception:
+                    pass
+            if height == previous_height:
+                stable_rounds += 1
+            else:
+                stable_rounds = 0
+                previous_height = height
+            if stable_rounds >= 3:
+                break
 
         html = page.content()
+        try:
+            visible_text = page.locator("body").inner_text(timeout=10000)
+        except Exception:
+            visible_text = ""
         browser.close()
 
     return dedupe_reviews([
@@ -863,6 +886,7 @@ def fetch_reviews(product: Product) -> list[Review]:
         *extract_script_json_reviews(html),
         *extract_visible_reviews(html),
         *extract_embedded_reviews(html),
+        *extract_visible_reviews(visible_text),
     ])
 
 

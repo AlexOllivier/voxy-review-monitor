@@ -98,6 +98,19 @@ def first_int(value):
     return int(number) if number is not None else None
 
 
+def review_count_from_value(value):
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    text = str(value)
+    match = re.search(r"\d[\d\s.,]*", text)
+    if not match:
+        return None
+    digits = re.sub(r"\D", "", match.group(0))
+    return int(digits) if digits else None
+
+
 def rating_summary_from_json(value):
     if isinstance(value, dict):
         aggregate = value.get("aggregateRating") if isinstance(value.get("aggregateRating"), dict) else value
@@ -106,7 +119,7 @@ def rating_summary_from_json(value):
             or aggregate.get("rating")
             or aggregate.get("averageRating")
         )
-        count = first_int(
+        count = review_count_from_value(
             aggregate.get("reviewCount")
             or aggregate.get("ratingCount")
             or aggregate.get("count")
@@ -123,6 +136,68 @@ def rating_summary_from_json(value):
             if found:
                 return found
     return None
+
+
+def clean_page_text_for_rating(value):
+    text = base.html_to_text(str(value or ""))
+    text = base.normalize_text(text)
+    text = text.replace("\u00a0", " ").replace("\u202f", " ")
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def nearby_review_count(text, start, end, radius=180):
+    window_start = max(0, start - radius)
+    window_end = min(len(text), end + radius)
+    window = text[window_start:window_end]
+    count_patterns = [
+        r"(\d[\d\s.,]*)\s*(?:reviews|review|avis|opiniones|recensioni|bewertungen|beoordelingen)",
+        r"(?:reviews|review|avis|opiniones|recensioni|bewertungen|beoordelingen)\s*(\d[\d\s.,]*)",
+    ]
+    for pattern in count_patterns:
+        match = re.search(pattern, window, flags=re.IGNORECASE)
+        if match:
+            count = review_count_from_value(match.group(1))
+            if count is not None:
+                return count
+    return None
+
+
+def extract_rating_summary_from_text(text):
+    text = clean_page_text_for_rating(text)
+    if not text:
+        return {}
+
+    paired_patterns = [
+        r"(?<!\d)([1-5](?:[\.,]\d{1,2})?)\s*(?:/ ?5|out of 5|sur 5).{0,180}?(\d[\d\s.,]*)\s*(?:reviews|review|avis|opiniones|recensioni|bewertungen|beoordelingen)",
+        r"(?<!\d)([1-5](?:[\.,]\d{1,2})?)\s+(\d[\d\s.,]*)\s*(?:reviews|review|avis|opiniones|recensioni|bewertungen|beoordelingen)",
+        r"(\d[\d\s.,]*)\s*(?:reviews|review|avis|opiniones|recensioni|bewertungen|beoordelingen).{0,180}?(?<!\d)([1-5](?:[\.,]\d{1,2})?)\s*(?:/ ?5|out of 5|sur 5)?",
+    ]
+    for pattern in paired_patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if not match:
+            continue
+        first = first_number(match.group(1))
+        second = first_number(match.group(2))
+        count_first = review_count_from_value(match.group(1))
+        count_second = review_count_from_value(match.group(2))
+        if first is None or second is None:
+            continue
+        score, count = (first, count_second) if first <= 5 else (second, count_first)
+        if count is not None and 0 < score <= 5:
+            return {"score": round(score, 2), "review_count": count, "source": "visible page text"}
+
+    score_patterns = [
+        r"(?<!\d)([1-5](?:[\.,]\d{1,2})?)\s*(?:/ ?5|out of 5|sur 5)",
+        r"(?:rating|note|score)\s*[:\-]?\s*([1-5](?:[\.,]\d{1,2})?)",
+    ]
+    for pattern in score_patterns:
+        for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+            score = first_number(match.group(1))
+            count = nearby_review_count(text, match.start(), match.end())
+            if score is not None and count is not None and 0 < score <= 5:
+                return {"score": round(score, 2), "review_count": count, "source": "visible page text"}
+    return {}
 
 
 def extract_official_rating_summary(html):
@@ -155,7 +230,52 @@ def extract_official_rating_summary(html):
         score, count = (first, int(second)) if first <= 5 else (second, int(first))
         if 0 < score <= 5:
             return {"score": round(score, 2), "review_count": count, "source": "page text"}
-    return {}
+    visible_text = soup.get_text(" ", strip=True)
+    return extract_rating_summary_from_text(visible_text) or extract_rating_summary_from_text(html)
+
+
+def exhaust_product_page(page):
+    click_labels = [
+        "accept", "accepter", "j'accepte", "allow all", "tout accepter",
+        "reviews", "avis", "customer reviews", "see reviews", "all reviews",
+        "read reviews", "more reviews", "show more", "load more", "read more",
+        "voir les avis", "tous les avis", "voir plus", "afficher plus",
+    ]
+    for label in click_labels:
+        for _ in range(3):
+            try:
+                page.get_by_text(re.compile(label, re.I)).first.click(timeout=1800)
+                page.wait_for_timeout(1200)
+            except Exception:
+                break
+
+    previous_height = 0
+    stable_rounds = 0
+    for _ in range(18):
+        try:
+            height = page.evaluate("document.body.scrollHeight")
+        except Exception:
+            height = previous_height
+        page.mouse.wheel(0, 4200)
+        page.wait_for_timeout(900)
+        for label in ["show more", "load more", "read more", "voir plus", "afficher plus", "more reviews", "tous les avis"]:
+            try:
+                page.get_by_text(re.compile(label, re.I)).first.click(timeout=900)
+                page.wait_for_timeout(800)
+            except Exception:
+                pass
+        if height == previous_height:
+            stable_rounds += 1
+        else:
+            stable_rounds = 0
+            previous_height = height
+        if stable_rounds >= 3:
+            break
+    try:
+        page.evaluate("window.scrollTo(0, 0)")
+        page.wait_for_timeout(500)
+    except Exception:
+        pass
 
 
 def fetch_official_rating_summary_with_browser(url):
@@ -171,11 +291,20 @@ def fetch_official_rating_summary_with_browser(url):
                 ),
             )
             page.goto(url, wait_until="domcontentloaded", timeout=45000)
-            page.wait_for_timeout(3500)
+            try:
+                page.wait_for_load_state("networkidle", timeout=15000)
+            except Exception:
+                pass
+            page.wait_for_timeout(2500)
+            exhaust_product_page(page)
             html = page.content()
             visible_text = page.locator("body").inner_text(timeout=10000)
             browser.close()
-        return extract_official_rating_summary(html) or extract_official_rating_summary(visible_text)
+        return (
+            extract_official_rating_summary(html)
+            or extract_rating_summary_from_text(visible_text)
+            or extract_rating_summary_from_text(html)
+        )
     except Exception as exc:
         print(f"Browser official platform score skipped for {url}: {exc}")
         return {}
@@ -347,7 +476,10 @@ def summarize_reviews(product, reviews):
     official_review_count = official.get("review_count")
     if official_score is not None:
         summary["global_score"] = official_score
-        summary["review_count"] = official_review_count or detected_review_count
+        if official_review_count is not None:
+            summary["review_count"] = official_review_count
+        elif detected_review_count:
+            summary["review_count"] = detected_review_count
         summary["alert"] = bool(official_score < product.score_threshold)
     summary["official_score"] = official_score
     summary["official_review_count"] = official_review_count
