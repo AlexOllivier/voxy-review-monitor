@@ -12,6 +12,11 @@ import voxy_weekly_alert_runner as runner
 ORIGINAL_UPDATE_GOOGLE_SHEET_DASHBOARD = runner.update_google_sheet_dashboard
 DASHBOARD_URL = "https://docs.google.com/spreadsheets/d/1XC_qHi4iPQeU9ashkwwaspw2tpVFWD-hWSTB8YuVy7A/edit?usp=sharing"
 DASHBOARD_COLUMN_WIDTHS = [360, 95, 120, 165, 120, 135, 125, 125, 145, 190, 380]
+HISTORY_COLUMN_WIDTHS = [
+    135, 125, 340, 95, 120, 165, 120, 360, 120, 105,
+    125, 150, 145, 190, 380, 95, 105, 95, 120, 115,
+    520, 135, 140, 130, 110,
+]
 INDICATOR_COLORS = {
     "good": {"red": 0.84, "green": 0.96, "blue": 0.89},
     "clear": {"red": 0.84, "green": 0.96, "blue": 0.89},
@@ -253,6 +258,55 @@ def apply_dashboard_layout(spreadsheet, dashboard, summaries):
     spreadsheet.batch_update({"requests": requests})
 
 
+def apply_history_layout(spreadsheet):
+    try:
+        history = spreadsheet.worksheet("History")
+    except Exception:
+        return
+    requests = []
+    for index, width in enumerate(HISTORY_COLUMN_WIDTHS):
+        requests.append({
+            "updateDimensionProperties": {
+                "range": {
+                    "sheetId": history.id,
+                    "dimension": "COLUMNS",
+                    "startIndex": index,
+                    "endIndex": index + 1,
+                },
+                "properties": {"pixelSize": width},
+                "fields": "pixelSize",
+            }
+        })
+    spreadsheet.batch_update({"requests": requests})
+    history.format("A:Y", {
+        "verticalAlignment": "MIDDLE",
+        "wrapStrategy": "WRAP",
+    })
+    history.format("A1:Y1", {
+        "horizontalAlignment": "CENTER",
+        "textFormat": {
+            "bold": True,
+            "foregroundColor": {"red": 0, "green": 0, "blue": 0},
+        },
+        "backgroundColor": {"red": 0.91, "green": 0.94, "blue": 0.98},
+    })
+    history.format("Q:V", {
+        "horizontalAlignment": "LEFT",
+        "textFormat": {
+            "foregroundColor": {"red": 0.05, "green": 0.08, "blue": 0.16},
+        },
+    })
+    history.format("Q1:V1", {
+        "horizontalAlignment": "CENTER",
+        "textFormat": {
+            "bold": True,
+            "foregroundColor": {"red": 0, "green": 0, "blue": 0},
+        },
+        "backgroundColor": {"red": 0.92, "green": 0.98, "blue": 0.96},
+    })
+    history.freeze(rows=1)
+
+
 def centered_update_google_sheet_dashboard(sheet_url, summaries):
     ORIGINAL_UPDATE_GOOGLE_SHEET_DASHBOARD(sheet_url, summaries)
     client = base.google_client_from_env()
@@ -299,6 +353,7 @@ def centered_update_google_sheet_dashboard(sheet_url, summaries):
         "backgroundColor": {"red": 0.91, "green": 0.94, "blue": 0.98},
     })
     apply_dashboard_layout(spreadsheet, dashboard, summaries)
+    apply_history_layout(spreadsheet)
     print("Dashboard cells centered.")
 
 

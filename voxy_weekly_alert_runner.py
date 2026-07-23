@@ -31,13 +31,14 @@ HISTORY_HEADERS = [
     "Main issue",
     "Recommended action",
     "Low reviews",
-    "Critical reviews",
     "Review rating",
+    "Review severity",
     "Review author",
     "Review date",
     "Review text EN",
     "Review source",
     "Review ID",
+    "Critical reviews",
     "Status",
 ]
 
@@ -382,6 +383,16 @@ def review_text_in_english(review):
     return plain_ascii_text(original)
 
 
+def review_severity(review):
+    if review is None:
+        return ""
+    if review.rating < 3:
+        return "Critical"
+    if review.rating < 4:
+        return "Poor"
+    return "Low"
+
+
 def history_minimum_rows(summaries):
     return max(100, len(summaries) * 4 + 20)
 
@@ -398,15 +409,47 @@ def history_needs_reset(rows):
     return False
 
 
+def value_from_history_row(row, header_lookup, header):
+    index = header_lookup.get(header.lower())
+    return row[index] if index is not None and index < len(row) else ""
+
+
+def migrate_history_rows(rows):
+    if not rows:
+        return [HISTORY_HEADERS]
+    old_headers = [header.strip().lower() for header in rows[0]]
+    header_lookup = {header: index for index, header in enumerate(old_headers) if header}
+    migrated = [HISTORY_HEADERS]
+    for row in rows[1:]:
+        if not any(str(cell).strip() for cell in row):
+            continue
+        new_row = []
+        for header in HISTORY_HEADERS:
+            if header == "Review severity":
+                rating = base.parse_optional_float(value_from_history_row(row, header_lookup, "Review rating"))
+                if rating is None:
+                    new_row.append("")
+                else:
+                    class ReviewStub:
+                        def __init__(self, rating):
+                            self.rating = rating
+                    new_row.append(review_severity(ReviewStub(rating)))
+                continue
+            new_row.append(value_from_history_row(row, header_lookup, header))
+        migrated.append(new_row)
+    return migrated
+
+
 def prepared_history_worksheet(spreadsheet, summaries, reset_incompatible=True):
     minimum_rows = history_minimum_rows(summaries)
     history = base.get_or_create_worksheet(spreadsheet, "History", rows=minimum_rows, cols=len(HISTORY_HEADERS))
     history.resize(rows=max(history.row_count, minimum_rows), cols=len(HISTORY_HEADERS))
     rows = history.get_all_values()
     if reset_incompatible and history_needs_reset(rows):
+        migrated_rows = migrate_history_rows(rows)
         history.clear()
-        history.update([HISTORY_HEADERS], value_input_option="USER_ENTERED")
-        rows = [HISTORY_HEADERS]
+        history.update(base.rectangularize_rows(migrated_rows), value_input_option="USER_ENTERED")
+        rows = migrated_rows
     return history, rows
 
 
@@ -589,13 +632,14 @@ def append_history_rows(spreadsheet, summaries):
             main_issue,
             recommended_action,
             summary.get("low_review_count", 0),
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
             summary.get("critical_review_count", 0),
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
             summary.get("status", "OK"),
         ])
         low_reviews = [review for review in summary.get("reviews", []) if review.rating <= 4]
@@ -618,18 +662,19 @@ def append_history_rows(spreadsheet, summaries):
                 summary.get("score_change_percent", "No history"),
                 summary.get("trend", "No history"),
                 dashboard_risk_signal(summary),
-                main_issue,
-                recommended_action,
-                summary.get("low_review_count", 0),
-                summary.get("critical_review_count", 0),
-                review.rating,
-                plain_ascii_text(base.clean_author_for_email(review)),
-                plain_ascii_text(base.clean_date_for_email(review)),
-                review_text_in_english(review),
-                plain_ascii_text(getattr(review, "source", "")),
-                review_id,
-                summary.get("status", "OK"),
-            ])
+            main_issue,
+            recommended_action,
+            summary.get("low_review_count", 0),
+            review.rating,
+            review_severity(review),
+            plain_ascii_text(base.clean_author_for_email(review)),
+            plain_ascii_text(base.clean_date_for_email(review)),
+            review_text_in_english(review),
+            plain_ascii_text(getattr(review, "source", "")),
+            review_id,
+            summary.get("critical_review_count", 0),
+            summary.get("status", "OK"),
+        ])
     if new_rows:
         history.append_rows(new_rows, value_input_option="USER_ENTERED")
 
