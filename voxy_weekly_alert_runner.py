@@ -282,8 +282,57 @@ def review_text_in_english(review):
     return original
 
 
+def history_minimum_rows(summaries):
+    return max(100, len(summaries) * 4 + 20)
+
+
+def history_needs_reset(rows):
+    if not rows:
+        return True
+    current_headers = [header.strip() for header in rows[0]]
+    if current_headers != HISTORY_HEADERS:
+        return True
+    for row in rows[1:]:
+        if any(str(cell).strip() for cell in row) and len(row) < len(HISTORY_HEADERS):
+            return True
+    return False
+
+
+def prepared_history_worksheet(spreadsheet, summaries):
+    minimum_rows = history_minimum_rows(summaries)
+    history = base.get_or_create_worksheet(spreadsheet, "History", rows=minimum_rows, cols=len(HISTORY_HEADERS))
+    history.resize(rows=max(history.row_count, minimum_rows), cols=len(HISTORY_HEADERS))
+    rows = history.get_all_values()
+    if history_needs_reset(rows):
+        history.clear()
+        history.update([HISTORY_HEADERS], value_input_option="USER_ENTERED")
+        rows = [HISTORY_HEADERS]
+    return history, rows
+
+
+def latest_scores_from_history_rows(rows):
+    latest = {}
+    if len(rows) < 2:
+        return latest
+    headers = [header.strip().lower() for header in rows[0]]
+    try:
+        product_index = headers.index("product")
+        score_index = headers.index("global score")
+    except ValueError:
+        return latest
+    for row in rows[1:]:
+        if len(row) <= max(product_index, score_index):
+            continue
+        product = row[product_index].strip()
+        score = base.parse_optional_float(row[score_index])
+        if product and score is not None:
+            latest[product] = score
+    return latest
+
+
 def annotate_score_evolution_from_history(spreadsheet, summaries):
-    previous_scores = base.latest_scores_from_history(spreadsheet)
+    _, rows = prepared_history_worksheet(spreadsheet, summaries)
+    previous_scores = latest_scores_from_history_rows(rows)
     for summary in summaries:
         current_score = summary.get("global_score")
         previous_score = previous_scores.get(summary["product"])
@@ -303,17 +352,7 @@ def annotate_score_evolution_from_history(spreadsheet, summaries):
 
 
 def append_history_rows(spreadsheet, summaries):
-    minimum_rows = max(100, len(summaries) * 4 + 20)
-    history = base.get_or_create_worksheet(spreadsheet, "History", rows=minimum_rows, cols=len(HISTORY_HEADERS))
-    history.resize(rows=max(history.row_count, minimum_rows), cols=len(HISTORY_HEADERS))
-    rows = history.get_all_values()
-    if not rows:
-        history.update([HISTORY_HEADERS], value_input_option="USER_ENTERED")
-    else:
-        current_headers = [header.strip() for header in rows[0]]
-        if current_headers != HISTORY_HEADERS:
-            history.update("A1:R1", [HISTORY_HEADERS], value_input_option="USER_ENTERED")
-
+    history, _ = prepared_history_worksheet(spreadsheet, summaries)
     run_timestamp = datetime.now(ZoneInfo("Europe/Paris")).strftime("%Y-%m-%d %H:%M")
     new_rows = []
     for summary in summaries:
