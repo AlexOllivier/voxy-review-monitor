@@ -26,14 +26,10 @@ INDICATOR_COLORS = {
     "low reviews": {"red": 1.0, "green": 0.90, "blue": 0.78},
     "low reviews found": {"red": 1.0, "green": 0.90, "blue": 0.78},
     "critical reviews": {"red": 1.0, "green": 0.84, "blue": 0.84},
-    "critical low reviews": {"red": 1.0, "green": 0.84, "blue": 0.84},
+    "critical reviews found": {"red": 1.0, "green": 0.84, "blue": 0.84},
     "score alert": {"red": 1.0, "green": 0.84, "blue": 0.84},
-    "low product score": {"red": 1.0, "green": 0.84, "blue": 0.84},
-    "refresh needed": {"red": 1.0, "green": 0.95, "blue": 0.75},
-    "not refreshed": {"red": 1.0, "green": 0.95, "blue": 0.75},
-    "no previous week": {"red": 0.94, "green": 0.96, "blue": 0.98},
-    "data not refreshed": {"red": 1.0, "green": 0.95, "blue": 0.75},
-    "data unavailable": {"red": 0.92, "green": 0.87, "blue": 1.0},
+    "score below target": {"red": 1.0, "green": 0.84, "blue": 0.84},
+    "source check needed": {"red": 1.0, "green": 0.95, "blue": 0.75},
     "technical check": {"red": 0.92, "green": 0.87, "blue": 1.0},
 }
 
@@ -197,9 +193,9 @@ def indicator_color(value):
         return {"red": 0.84, "green": 0.96, "blue": 0.89}
     if normalized.startswith("-"):
         return {"red": 1.0, "green": 0.84, "blue": 0.84}
-    if normalized in {"0.0%", "0%"} or (normalized.startswith("0") and "last week" in normalized):
+    if normalized in {"0.0%", "0%", "no change"}:
         return {"red": 0.91, "green": 0.94, "blue": 0.98}
-    if "check required" in normalized or "no history" in normalized or normalized in {"n/a", "no score", "score unavailable", "reviews unavailable"}:
+    if normalized in {"-", "n/a", "no score", "score unavailable", "reviews unavailable"}:
         return {"red": 0.94, "green": 0.96, "blue": 0.98}
     for key, color in INDICATOR_COLORS.items():
         if key in normalized:

@@ -678,15 +678,15 @@ def summarize_reviews(product, reviews):
     if official.get("blocked"):
         summary["status"] = "TECHNICAL_CHECK"
         summary["error"] = "Blocked or unreadable URL: platform anti-bot page returned instead of product content."
-        summary["data_quality_note"] = "Data not refreshed - platform blocked the page"
+        summary["data_quality_note"] = "Source score/reviews not captured"
     elif official_score is None and not detected_review_count:
         summary["status"] = "TECHNICAL_CHECK"
         summary["error"] = "No score or reviews extracted after full URL traversal."
-        summary["data_quality_note"] = "Data not refreshed - no score or reviews readable"
+        summary["data_quality_note"] = "Source score/reviews not captured"
     elif official_score is None:
-        summary["data_quality_note"] = "Platform score not refreshed"
+        summary["data_quality_note"] = "Source score not captured"
     elif official_review_count is None and not detected_review_count:
-        summary["data_quality_note"] = "Review count not refreshed"
+        summary["data_quality_note"] = "Source review count not captured"
     else:
         summary["data_quality_note"] = ""
     wording = analyze_review_wording(reviews)
@@ -1002,14 +1002,15 @@ def annotate_score_evolution_from_history(spreadsheet, summaries):
         label, delta = base.trend_label(current_score, previous_score)
         summary["trend"] = label
         summary["trend_delta"] = delta
-        if current_score is None:
-            summary["score_change"] = "Not refreshed"
-        elif previous_score is None:
-            summary["score_change"] = "No previous week"
+        if current_score is None or previous_score is None:
+            summary["score_change"] = "No change"
         else:
-            change = round(current_score - previous_score, 2)
-            sign = "+" if change > 0 else ""
-            summary["score_change"] = f"{sign}{change:.1f} vs last week"
+            change = round(current_score - previous_score, 1)
+            if change == 0:
+                summary["score_change"] = "No change"
+            else:
+                sign = "+" if change > 0 else ""
+                summary["score_change"] = f"{sign}{change:.1f}"
 
 
 def append_history_rows(spreadsheet, summaries):
@@ -1031,9 +1032,9 @@ def append_history_rows(spreadsheet, summaries):
             summary.get("owner", ""),
             summary.get("platform", ""),
             summary["url"],
-            current_review_count(summary) if current_review_count(summary) is not None else "Not refreshed",
-            current_score_value(summary) if current_score_value(summary) is not None else "Not refreshed",
-            summary.get("score_change", "No history"),
+            current_review_count(summary) if current_review_count(summary) is not None else "-",
+            current_score_value(summary) if current_score_value(summary) is not None else "-",
+            dashboard_score_evolution(summary),
             summary.get("trend", "No history"),
             dashboard_risk_signal(summary),
             main_issue,
@@ -1064,9 +1065,9 @@ def append_history_rows(spreadsheet, summaries):
                 summary.get("owner", ""),
                 summary.get("platform", ""),
                 summary["url"],
-                current_review_count(summary) if current_review_count(summary) is not None else "Not refreshed",
-                current_score_value(summary) if current_score_value(summary) is not None else "Not refreshed",
-                summary.get("score_change", "No history"),
+                current_review_count(summary) if current_review_count(summary) is not None else "-",
+                current_score_value(summary) if current_score_value(summary) is not None else "-",
+                dashboard_score_evolution(summary),
                 summary.get("trend", "No history"),
                 dashboard_risk_signal(summary),
             main_issue,
@@ -1090,50 +1091,38 @@ def dashboard_platform_score(item):
     score = current_score_value(item)
     if score is not None:
         return f"{score}/5"
-    last_known = item.get("last_known_score")
-    if last_known is not None:
-        return f"{last_known}/5 last verified"
-    return "Not refreshed"
+    return "-"
 
 
 def dashboard_review_number(item):
     review_count = current_review_count(item)
     if review_count is not None:
         return review_count
-    last_known = item.get("last_known_review_count")
-    if last_known is not None:
-        return f"{last_known} last verified"
-    return "Not refreshed"
+    return "-"
 
 
 def dashboard_risk_signal(item):
-    if item.get("last_known_score") is not None and current_score_value(item) is None:
-        return "Data not refreshed"
-    if item.get("status") in {"ERROR", "TECHNICAL_CHECK"}:
-        return "Data unavailable"
-    if current_score_value(item) is None or current_review_count(item) is None:
-        return "Data unavailable"
+    if item.get("status") in {"ERROR", "TECHNICAL_CHECK"} or current_score_value(item) is None or current_review_count(item) is None:
+        return "Source check needed"
     if item.get("alert"):
-        return "Low product score"
+        return "Score below target"
     if item.get("critical_review_count", 0) > 0:
-        return "Critical low reviews"
+        return "Critical reviews found"
     if item.get("low_review_count", 0) > 0:
         return "Low reviews found"
     return "Healthy"
 
 
 def dashboard_score_evolution(item):
-    value = item.get("score_change") or "No history"
-    if item.get("last_known_score") is not None and current_score_value(item) is None:
-        return "Not refreshed"
-    return "Not refreshed" if str(value).lower() in {"no score", "score unavailable", "n/a", "check required"} else value
+    value = str(item.get("score_change") or "").strip()
+    if re.fullmatch(r"[+-]\d+(?:\.\d+)?", value):
+        return value
+    return "No change"
 
 
 def dashboard_main_issue(item):
-    if item.get("last_known_score") is not None and current_score_value(item) is None:
-        timestamp = item.get("last_known_timestamp")
-        suffix = f" from {timestamp}" if timestamp else ""
-        return f"Current page not readable - showing last verified data{suffix}"
+    if current_score_value(item) is None or current_review_count(item) is None:
+        return "Source score/reviews not captured"
     if item.get("data_quality_note"):
         return item["data_quality_note"]
     if item.get("main_issue"):
@@ -1146,6 +1135,13 @@ def dashboard_main_issue(item):
     if item.get("low_review_count", 0) > 0:
         return "Recent low-rated feedback"
     return "No issue detected"
+
+
+def dashboard_recommended_action(item):
+    if current_score_value(item) is None or current_review_count(item) is None:
+        return "Check that the URL opens the exact product review page, then rerun Voxy with a clean product URL."
+    action = item.get("recommended_action") or (item.get("concrete_actions") or item.get("suggestions") or ["No action needed"])[0]
+    return action or "No action needed"
 
 
 def email_entry_sort_key(entry):
@@ -1167,12 +1163,12 @@ def email_entry_sort_key(entry):
 
 
 def google_rows_for_dashboard(summaries):
-    display_scores = [display_score_value(item) for item in summaries if display_score_value(item) is not None]
+    display_scores = [current_score_value(item) for item in summaries if current_score_value(item) is not None]
     average_score = round(sum(display_scores) / len(display_scores), 2) if display_scores else None
     rows = [
         ["Voxy weekly alert dashboard", ""],
         ["Products checked", len(summaries)],
-        ["Average score", average_score if average_score is not None else "Not refreshed"],
+        ["Average score", average_score if average_score is not None else "-"],
         ["Products needing attention", sum(1 for item in summaries if item.get("alert") or item.get("low_review_count", 0) or item.get("critical_review_count", 0))],
         ["Critical reviews", sum(int(item.get("critical_review_count", 0) or 0) for item in summaries)],
         [],
@@ -1190,7 +1186,7 @@ def google_rows_for_dashboard(summaries):
             dashboard_review_number(item),
             dashboard_risk_signal(item),
             dashboard_main_issue(item),
-            item.get("recommended_action") or (item.get("concrete_actions") or item.get("suggestions") or ["No action needed"])[0],
+            dashboard_recommended_action(item),
         ])
     return rows
 
@@ -1272,9 +1268,9 @@ def build_summary_email_body(recipient, entries, timezone_name):
             f"Platform: {email_safe_text(summary.get('platform'))}",
             f"Status: {email_safe_text(base.product_health(summary))}",
             f"Score evolution: {email_safe_text(dashboard_score_evolution(summary))}",
-            f"Score: {current_score_value(summary) if current_score_value(summary) is not None else 'Not refreshed'}/5",
-            *([f"Platform score: {summary.get('official_score')}/5 from {summary.get('official_review_count') or 'Not refreshed'} reviews"] if summary.get("official_score") is not None else []),
-            f"Voxy sample: {summary.get('detected_score') if summary.get('detected_score') is not None else 'Not refreshed'}/5 from {summary.get('detected_review_count') or 0} detected reviews",
+            f"Score: {current_score_value(summary)}/5" if current_score_value(summary) is not None else "Score: -",
+            *([f"Platform score: {summary.get('official_score')}/5 from {summary.get('official_review_count') or '-'} reviews"] if summary.get("official_score") is not None else []),
+            f"Voxy sample: {summary.get('detected_score')}/5 from {summary.get('detected_review_count') or 0} detected reviews" if summary.get("detected_score") is not None else "Voxy sample: -",
             f"Low reviews: {summary['low_review_count']}",
             f"Critical reviews < 3: {summary['critical_review_count']}",
             f"Action: {email_safe_text((summary.get('concrete_actions') or summary.get('suggestions') or ['Review product feedback'])[0], 1100)}",
@@ -1310,7 +1306,7 @@ def send_technical_issue_alert(summaries, timezone_name):
         lines.extend([
             f"{index}. {email_safe_text(summary.get('product'), 220)}",
             f"Platform: {email_safe_text(summary.get('platform'))}",
-            f"Status: {email_safe_text(summary.get('status') or 'Data not refreshed')}",
+            f"Status: {email_safe_text(summary.get('status') or 'Source check needed')}",
             f"Issue: {email_safe_text(summary.get('error') or 'Missing score, review count, or readable review data.', 500)}",
             f"URL: {summary.get('url') or 'Not provided'}",
             "",
