@@ -106,12 +106,17 @@ def review_count_from_value(value):
         return None
     if isinstance(value, int):
         return value
-    text = str(value)
+    text = str(value).strip()
+    k_match = re.search(r"(\d+(?:[\.,]\d+)?)\s*[kK]\b", text)
+    if k_match:
+        return int(float(k_match.group(1).replace(",", ".")) * 1000)
     match = re.search(r"\d[\d\s.,]*", text)
     if not match:
         return None
     digits = re.sub(r"\D", "", match.group(0))
-    return int(digits) if digits else None
+    if not digits:
+        return None
+    return int(digits)
 
 
 def rating_summary_from_json(value):
@@ -167,8 +172,8 @@ def nearby_review_count(text, start, end, radius=180):
     window_end = min(len(text), end + radius)
     window = text[window_start:window_end]
     count_patterns = [
-        r"(\d[\d\s.,]*)\s*(?:reviews|review|traveler reviews|customer reviews|avis|opiniones|recensioni|bewertungen|beoordelingen)",
-        r"(?:reviews|review|traveler reviews|customer reviews|avis|opiniones|recensioni|bewertungen|beoordelingen)\s*(\d[\d\s.,]*)",
+        r"(\d[\d\s.,kK]*)\s*(?:reviews|review|traveler reviews|customer reviews|avis|opiniones|recensioni|bewertungen|beoordelingen)",
+        r"(?:reviews|review|traveler reviews|customer reviews|avis|opiniones|recensioni|bewertungen|beoordelingen)\s*(\d[\d\s.,kK]*)",
         r"\((\d[\d\s.,]*)\)\s*(?:reviews|review|traveler reviews|customer reviews)",
     ]
     for pattern in count_patterns:
@@ -186,7 +191,9 @@ def extract_rating_summary_from_text(text):
         return {}
 
     paired_patterns = [
-        r"(?<!\d)([1-5](?:[\.,]\d{1,2})?)\s*(?:based on|from)\s*(\d[\d\s.,]*)\s*(?:reviews|review|traveler reviews|customer reviews)",
+        r"(?<!\d)([1-5](?:[\.,]\d{1,2})?)\s*(?:based on|from)\s*(\d[\d\s.,kK]*)\s*(?:reviews|review|traveler reviews|customer reviews)",
+        r"(?<!\d)([1-5](?:[\.,]\d{1,2})?)\s*/\s*5\s*(\d[\d\s.,kK]*)\s*(?:avis|reviews|review)",
+        r"(?<!\d)([1-5](?:[\.,]\d{1,2})?)\s*\(?\s*(\d[\d\s.,kK]*)\s*\)?\s*(?:avis|reviews|review)",
         r"(?:total reviews and rating from viator|reviews).{0,120}?(?<!\d)([1-5](?:[\.,]\d{1,2})?).{0,120}?(?:based on|from)\s*(\d[\d\s.,]*)\s*(?:reviews|review)",
         r"(?<!\d)([1-5](?:[\.,]\d{1,2})?)\s*(?:/ ?5|out of 5|sur 5|of 5 bubbles|bubbles).{0,220}?(\d[\d\s.,]*)\s*(?:reviews|review|traveler reviews|customer reviews|avis|opiniones|recensioni|bewertungen|beoordelingen)",
         r"(?<!\d)([1-5](?:[\.,]\d{1,2})?)\s*(?:stars?|etoiles?|bubbles)?.{0,160}?(\d[\d\s.,]*)\s*(?:reviews|review|traveler reviews|customer reviews|avis|opiniones|recensioni|bewertungen|beoordelingen)",
@@ -233,7 +240,11 @@ def url_variants_for_rating(url):
     add(url)
     clean_query = {
         key: value for key, value in base_query.items()
-        if key.lower() not in {"ranking_uuid", "visitor-id", "date_from", "date_to", "pid", "mcid", "medium", "campaign", "target_lander"}
+        if key.lower() not in {
+            "ranking_uuid", "visitor-id", "date_from", "date_to", "pid", "mcid",
+            "medium", "campaign", "target_lander", "spm", "aid", "aff_adid",
+            "aff_label1", "aff_label2", "utm_source", "utm_medium", "utm_campaign",
+        }
     }
     add(urlunparse(parsed._replace(query=urlencode(clean_query, doseq=True))))
 
@@ -249,6 +260,10 @@ def url_variants_for_rating(url):
             add(urlunparse(parsed._replace(query=urlencode(gyg_query, doseq=True))))
     if "viator." in parsed.netloc:
         add(urlunparse(parsed._replace(query="")))
+    if "headout." in parsed.netloc:
+        add(urlunparse(parsed._replace(query="", fragment="reviews")))
+    if "klook." in parsed.netloc:
+        add(urlunparse(parsed._replace(query="", fragment="reviews")))
     return variants
 
 
@@ -338,6 +353,8 @@ def exhaust_product_page(page):
         "read reviews", "more reviews", "show more", "load more", "read more",
         "voir les avis", "tous les avis", "voir plus", "afficher plus",
         "traveler reviews", "see all reviews", "show all reviews", "more traveler reviews",
+        "le plus recent", "le plus récent", "< 3 etoiles", "< 3 étoiles", "3 etoiles", "3 étoiles",
+        "voir tous les avis", "tous", "trier par",
     ]
     for label in click_labels:
         for _ in range(3):
@@ -356,7 +373,7 @@ def exhaust_product_page(page):
             height = previous_height
         page.mouse.wheel(0, 4200)
         page.wait_for_timeout(900)
-        for label in ["show more", "load more", "read more", "voir plus", "afficher plus", "more reviews", "tous les avis", "traveler reviews", "see all reviews"]:
+        for label in ["show more", "load more", "read more", "voir plus", "afficher plus", "more reviews", "tous les avis", "traveler reviews", "see all reviews", "le plus recent", "le plus récent", "< 3 etoiles", "< 3 étoiles", "voir tous les avis", "tous"]:
             try:
                 page.get_by_text(re.compile(label, re.I)).first.click(timeout=900)
                 page.wait_for_timeout(800)

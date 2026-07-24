@@ -742,10 +742,10 @@ def extract_script_json_reviews(html: str) -> list[Review]:
 
 def star_glyph_rating(value: str) -> float | None:
     text = str(value or "")
-    if not any(symbol in text for symbol in ["★", "☆", "★", "☆"]):
+    if not any(symbol in text for symbol in ["★", "☆", "★", "☆", "★", "☆"]):
         return None
-    filled = text.count("★")
-    empty = text.count("☆")
+    filled = text.count("★") + text.count("★")
+    empty = text.count("☆") + text.count("☆")
     return float(filled) if filled and filled + empty <= 5 else None
 
 
@@ -827,13 +827,38 @@ def extract_plain_text_reviews(text: str) -> list[Review]:
 
         title = lines[index + 1] if index + 1 < len(lines) else ""
         meta = lines[index + 2] if index + 2 < len(lines) else ""
+        date_value = ""
+        rating_line = line
+        rating_date_match = re.search(r"(aujourd'hui|hier|la semaine derni[eè]re|last week|today|yesterday|[A-Z][a-z]{2,8}\\s+\\d{4}|\\w+\\s+\\d{4})", rating_line, re.I)
+        if rating_date_match:
+            date_value = rating_date_match.group(1)
+        body_start = index + 3
+        if index >= 1 and re.search(r"\d{4}/\d{2}/\d{2}", lines[index - 1]):
+            date_value = re.search(r"\d{4}/\d{2}/\d{2}", lines[index - 1]).group(0)
+            if index >= 2:
+                meta = lines[index - 2]
+            body_start = index + 2
+        elif index >= 2 and re.search(r"\d{4}/\d{2}/\d{2}", lines[index - 2]):
+            date_value = re.search(r"\d{4}/\d{2}/\d{2}", lines[index - 2]).group(0)
+            meta = lines[index - 3] if index >= 3 else meta
+            body_start = index + 2
+        if re.search(r"\butilisateur klook\b|\bklook user\b|^\w+\s+\*+", title, re.I):
+            meta = title
+            title = ""
+            body_start = index + 2
+        elif title and re.search(r"\b(voyage|reservation|réservation|verified|couple|famille|solo)\b", meta, re.I):
+            meta = title
+            title = ""
+            body_start = index + 3
+        if re.search(r"\d{4}/\d{2}/\d{2}", meta):
+            date_value = re.search(r"\d{4}/\d{2}/\d{2}", meta).group(0)
         body_lines = []
-        cursor = index + 3
+        cursor = body_start
         while cursor < len(lines):
             next_line = lines[cursor]
             if star_glyph_rating(next_line) or rating_from_value(next_line):
                 break
-            if re.search(r"^response from host\b|^read more\b|^see \d+ more reviews\b", next_line, re.I):
+            if re.search(r"^response from host\b|^read more\b|^see \d+ more reviews\b|^serviable\b|^foire\b|^avis pour\b|^voir le commentaire original\b", next_line, re.I):
                 cursor += 1
                 continue
             body_lines.append(next_line)
@@ -842,7 +867,7 @@ def extract_plain_text_reviews(text: str) -> list[Review]:
             cursor += 1
         body = normalize_text(" ".join([title] + body_lines))
         if body and len(body) > 20:
-            reviews.append(Review(rating=rating, text=body[:1600], author=meta, source="visible-page-text"))
+            reviews.append(Review(rating=rating, text=body[:1600], author=meta, date=date_value, source="visible-page-text"))
         index = max(cursor, index + 1)
     return reviews
 
@@ -928,7 +953,9 @@ def fetch_reviews(product: Product) -> list[Review]:
             "reviews", "avis", "customer reviews", "see reviews", "all reviews",
             "read reviews", "show more", "voir plus", "load more", "read more",
             "more reviews", "tous les avis", "afficher plus", "traveler reviews",
-            "see all reviews", "show all reviews", "more traveler reviews"
+            "see all reviews", "show all reviews", "more traveler reviews",
+            "le plus recent", "le plus récent", "< 3 etoiles", "< 3 étoiles", "3 etoiles", "3 étoiles",
+            "voir tous les avis", "tous", "trier par"
         ]
         for label in click_labels:
             for _ in range(3):
@@ -947,7 +974,7 @@ def fetch_reviews(product: Product) -> list[Review]:
                 height = previous_height
             page.mouse.wheel(0, 4200)
             page.wait_for_timeout(900)
-            for label in ["show more", "load more", "read more", "voir plus", "afficher plus", "more reviews", "tous les avis", "traveler reviews", "see all reviews"]:
+            for label in ["show more", "load more", "read more", "voir plus", "afficher plus", "more reviews", "tous les avis", "traveler reviews", "see all reviews", "le plus recent", "le plus récent", "< 3 etoiles", "< 3 étoiles", "voir tous les avis", "tous"]:
                 try:
                     page.get_by_text(re.compile(label, re.I)).first.click(timeout=900)
                     page.wait_for_timeout(800)
