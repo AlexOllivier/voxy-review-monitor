@@ -25,7 +25,7 @@ HISTORY_HEADERS = [
     "URL",
     "Reviews detected",
     "Global score",
-    "Score change %",
+    "Score change vs last week",
     "Trend",
     "Risk signal",
     "Main issue",
@@ -796,15 +796,13 @@ def annotate_score_evolution_from_history(spreadsheet, summaries):
         summary["trend"] = label
         summary["trend_delta"] = delta
         if current_score is None:
-            summary["score_change_percent"] = "Check required"
+            summary["score_change"] = "Check required"
         elif previous_score is None:
-            summary["score_change_percent"] = "No history"
-        elif previous_score == 0:
-            summary["score_change_percent"] = "Check required"
+            summary["score_change"] = "No history"
         else:
-            change = ((current_score - previous_score) / previous_score) * 100
+            change = round(current_score - previous_score, 2)
             sign = "+" if change > 0 else ""
-            summary["score_change_percent"] = f"{sign}{change:.1f}%"
+            summary["score_change"] = f"{sign}{change:.1f} vs last week"
 
 
 def append_history_rows(spreadsheet, summaries):
@@ -828,7 +826,7 @@ def append_history_rows(spreadsheet, summaries):
             summary["url"],
             current_review_count(summary) if current_review_count(summary) is not None else "Check required",
             current_score_value(summary) if current_score_value(summary) is not None else "Check required",
-            summary.get("score_change_percent", "No history"),
+            summary.get("score_change", "No history"),
             summary.get("trend", "No history"),
             dashboard_risk_signal(summary),
             main_issue,
@@ -861,7 +859,7 @@ def append_history_rows(spreadsheet, summaries):
                 summary["url"],
                 current_review_count(summary) if current_review_count(summary) is not None else "Check required",
                 current_score_value(summary) if current_score_value(summary) is not None else "Check required",
-                summary.get("score_change_percent", "No history"),
+                summary.get("score_change", "No history"),
                 summary.get("trend", "No history"),
                 dashboard_risk_signal(summary),
             main_issue,
@@ -910,7 +908,7 @@ def dashboard_risk_signal(item):
 
 
 def dashboard_score_evolution(item):
-    value = item.get("score_change_percent") or "No history"
+    value = item.get("score_change") or "No history"
     return "Check required" if str(value).lower() in {"no score", "score unavailable", "n/a"} else value
 
 

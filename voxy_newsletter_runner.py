@@ -187,7 +187,7 @@ def indicator_color(value):
         return {"red": 0.84, "green": 0.96, "blue": 0.89}
     if normalized.startswith("-"):
         return {"red": 1.0, "green": 0.84, "blue": 0.84}
-    if normalized in {"0.0%", "0%"}:
+    if normalized in {"0.0%", "0%"} or (normalized.startswith("0") and "last week" in normalized):
         return {"red": 0.91, "green": 0.94, "blue": 0.98}
     if "check required" in normalized or "no history" in normalized or normalized in {"n/a", "no score", "score unavailable", "reviews unavailable"}:
         return {"red": 0.94, "green": 0.96, "blue": 0.98}
