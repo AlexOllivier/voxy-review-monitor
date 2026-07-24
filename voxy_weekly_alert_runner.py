@@ -9,6 +9,7 @@ import time
 import unicodedata
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
@@ -120,14 +121,23 @@ def rating_summary_from_json(value):
             aggregate.get("ratingValue")
             or aggregate.get("rating")
             or aggregate.get("averageRating")
+            or aggregate.get("averageScore")
+            or aggregate.get("avgRating")
+            or aggregate.get("score")
+            or aggregate.get("stars")
         )
         count = review_count_from_value(
             aggregate.get("reviewCount")
             or aggregate.get("ratingCount")
             or aggregate.get("reviewsCount")
             or aggregate.get("totalReviews")
+            or aggregate.get("totalReviewCount")
+            or aggregate.get("reviewCountTotal")
             or aggregate.get("numberOfReviews")
             or aggregate.get("reviews_count")
+            or aggregate.get("review_count")
+            or aggregate.get("total_reviews")
+            or aggregate.get("totalCount")
             or aggregate.get("count")
         )
         if rating is not None and 0 < rating <= 5:
@@ -176,6 +186,7 @@ def extract_rating_summary_from_text(text):
 
     paired_patterns = [
         r"(?<!\d)([1-5](?:[\.,]\d{1,2})?)\s*(?:/ ?5|out of 5|sur 5).{0,180}?(\d[\d\s.,]*)\s*(?:reviews|review|avis|opiniones|recensioni|bewertungen|beoordelingen)",
+        r"(?<!\d)([1-5](?:[\.,]\d{1,2})?)\s*(?:stars?|etoiles?)?.{0,120}?(\d[\d\s.,]*)\s*(?:reviews|review|avis|opiniones|recensioni|bewertungen|beoordelingen)",
         r"(?<!\d)([1-5](?:[\.,]\d{1,2})?)\s+(\d[\d\s.,]*)\s*(?:reviews|review|avis|opiniones|recensioni|bewertungen|beoordelingen)",
         r"(\d[\d\s.,]*)\s*(?:reviews|review|avis|opiniones|recensioni|bewertungen|beoordelingen).{0,180}?(?<!\d)([1-5](?:[\.,]\d{1,2})?)\s*(?:/ ?5|out of 5|sur 5)?",
     ]
@@ -206,6 +217,58 @@ def extract_rating_summary_from_text(text):
     return {}
 
 
+def url_variants_for_rating(url):
+    variants = []
+    parsed = urlparse(url)
+    base_query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+
+    def add(candidate):
+        if candidate and candidate not in variants:
+            variants.append(candidate)
+
+    add(url)
+    clean_query = {
+        key: value for key, value in base_query.items()
+        if key.lower() not in {"ranking_uuid", "visitor-id", "date_from", "date_to"}
+    }
+    add(urlunparse(parsed._replace(query=urlencode(clean_query, doseq=True))))
+
+    if "getyourguide." in parsed.netloc:
+        gyg_query = dict(clean_query)
+        gyg_query["locale_autoredirect_optout"] = "true"
+        path = parsed.path
+        if "/fr-fr/" in path:
+            add(urlunparse(parsed._replace(path=path.replace("/fr-fr/", "/en-gb/", 1), query=urlencode(gyg_query, doseq=True))))
+        elif "/en-gb/" not in path:
+            add(urlunparse(parsed._replace(query=urlencode(gyg_query, doseq=True))))
+        else:
+            add(urlunparse(parsed._replace(query=urlencode(gyg_query, doseq=True))))
+    return variants
+
+
+def extract_rating_summary_from_browser_dom(page):
+    snippets = []
+    try:
+        snippets.append(page.locator("body").inner_text(timeout=10000))
+    except Exception:
+        pass
+    try:
+        snippets.append(page.evaluate("""
+            () => Array.from(document.querySelectorAll('[aria-label], [title], meta, script[type="application/ld+json"]'))
+              .map((node) => node.getAttribute('aria-label') || node.getAttribute('title') || node.getAttribute('content') || node.textContent || '')
+              .filter(Boolean)
+              .join(' ')
+        """))
+    except Exception:
+        pass
+    for snippet in snippets:
+        found = extract_rating_summary_from_text(snippet)
+        if found:
+            found["source"] = "browser dom"
+            return found
+    return {}
+
+
 def extract_official_rating_summary(html):
     soup = base.BeautifulSoup(html, "html.parser")
     for script in soup.find_all("script", {"type": "application/ld+json"}):
@@ -219,14 +282,17 @@ def extract_official_rating_summary(html):
         if found:
             return found
 
+    decoded_html = base.decode_jsonish_text(html)
     patterns = [
         r'"ratingValue"\s*:\s*"?(\d+(?:[\.,]\d+)?)"?[^{}]{0,250}"reviewCount"\s*:\s*"?(\d+)"?',
         r'"reviewCount"\s*:\s*"?(\d+)"?[^{}]{0,250}"ratingValue"\s*:\s*"?(\d+(?:[\.,]\d+)?)"?',
+        r'"averageRating"\s*:\s*"?(\d+(?:[\.,]\d+)?)"?[^{}]{0,250}"(?:reviewsCount|totalReviews|totalReviewCount)"\s*:\s*"?(\d+)"?',
+        r'"(?:reviewsCount|totalReviews|totalReviewCount)"\s*:\s*"?(\d+)"?[^{}]{0,250}"averageRating"\s*:\s*"?(\d+(?:[\.,]\d+)?)"?',
         r'(\d+(?:[\.,]\d+)?)\s*/\s*5[^0-9]{0,80}(\d+)\s+(?:reviews|avis)',
         r'(\d+(?:[\.,]\d+)?)\s+(\d+)\s+(?:reviews|avis)',
     ]
     for pattern in patterns:
-        match = re.search(pattern, html, flags=re.IGNORECASE)
+        match = re.search(pattern, decoded_html, flags=re.IGNORECASE)
         if not match:
             continue
         first = first_number(match.group(1))
@@ -237,7 +303,18 @@ def extract_official_rating_summary(html):
         if 0 < score <= 5:
             return {"score": round(score, 2), "review_count": count, "source": "page text"}
     visible_text = soup.get_text(" ", strip=True)
-    return extract_rating_summary_from_text(visible_text) or extract_rating_summary_from_text(html)
+    meta_text = " ".join(
+        value for value in (
+            tag.get("content") or tag.get("aria-label") or tag.get("title") or ""
+            for tag in soup.find_all(["meta", "span", "div", "button"])
+        )
+        if value and re.search(r"rating|review|avis|etoile|star|/5|sur 5", value, re.I)
+    )
+    return (
+        extract_rating_summary_from_text(meta_text)
+        or extract_rating_summary_from_text(visible_text)
+        or extract_rating_summary_from_text(html)
+    )
 
 
 def exhaust_product_page(page):
@@ -343,26 +420,44 @@ def fetch_official_rating_summary_with_browser(url):
                     "--disable-dev-shm-usage",
                 ],
             )
-            context, page = new_stealth_page(browser, locale="en-US")
-            page.goto(url, wait_until="domcontentloaded", timeout=45000)
-            try:
-                page.wait_for_load_state("networkidle", timeout=15000)
-            except Exception:
-                pass
-            page.wait_for_timeout(2500)
-            real_page_loaded = wait_for_real_product_page(page)
-            exhaust_product_page(page)
-            html = page.content()
-            visible_text = page.locator("body").inner_text(timeout=10000)
-            context.close()
+            blocked = False
+            result = {}
+            for candidate_url in url_variants_for_rating(url):
+                for locale in ("en-US", "fr-FR"):
+                    context, page = new_stealth_page(browser, locale=locale)
+                    try:
+                        page.goto(candidate_url, wait_until="domcontentloaded", timeout=60000)
+                        try:
+                            page.wait_for_load_state("networkidle", timeout=15000)
+                        except Exception:
+                            pass
+                        page.wait_for_timeout(2500)
+                        real_page_loaded = wait_for_real_product_page(page)
+                        blocked = blocked or not real_page_loaded
+                        exhaust_product_page(page)
+                        html = page.content()
+                        visible_text = page.locator("body").inner_text(timeout=10000)
+                        found = (
+                            extract_official_rating_summary(html)
+                            or extract_rating_summary_from_browser_dom(page)
+                            or extract_rating_summary_from_text(visible_text)
+                            or extract_rating_summary_from_text(html)
+                        )
+                        if found:
+                            result = found
+                            break
+                    finally:
+                        context.close()
+                    if result:
+                        break
+                if result:
+                    break
             browser.close()
-        if not real_page_loaded:
+        if result:
+            return result
+        if blocked:
             return {"blocked": True, "source": "platform anti-bot challenge"}
-        return (
-            extract_official_rating_summary(html)
-            or extract_rating_summary_from_text(visible_text)
-            or extract_rating_summary_from_text(html)
-        )
+        return {}
     except Exception as exc:
         print(f"Browser official platform score skipped for {url}: {exc}")
         return {}
@@ -372,20 +467,23 @@ def fetch_official_rating_summary(url):
     if url in OFFICIAL_RATING_CACHE:
         return OFFICIAL_RATING_CACHE[url]
     summary = {}
-    try:
-        request = Request(url, headers={
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/126.0 Safari/537.36"
-            ),
-            "Accept-Language": "en-US,en;q=0.9,fr;q=0.8",
-        })
-        with urlopen(request, timeout=30) as response:
-            html = response.read().decode("utf-8", errors="ignore")
-        summary = extract_official_rating_summary(html)
-    except Exception as exc:
-        print(f"Official platform score skipped for {url}: {exc}")
+    for candidate_url in url_variants_for_rating(url):
+        try:
+            request = Request(candidate_url, headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/126.0 Safari/537.36"
+                ),
+                "Accept-Language": "en-US,en;q=0.9,fr;q=0.8",
+            })
+            with urlopen(request, timeout=30) as response:
+                html = response.read().decode("utf-8", errors="ignore")
+            summary = extract_official_rating_summary(html)
+            if summary:
+                break
+        except Exception as exc:
+            print(f"Official platform score skipped for {candidate_url}: {exc}")
     if not summary:
         summary = fetch_official_rating_summary_with_browser(url)
     OFFICIAL_RATING_CACHE[url] = summary or {}
@@ -548,15 +646,15 @@ def summarize_reviews(product, reviews):
     if official.get("blocked"):
         summary["status"] = "TECHNICAL_CHECK"
         summary["error"] = "Blocked or unreadable URL: platform anti-bot page returned instead of product content."
-        summary["data_quality_note"] = "Blocked or unreadable URL"
+        summary["data_quality_note"] = "Data not refreshed - platform blocked the page"
     elif official_score is None and not detected_review_count:
         summary["status"] = "TECHNICAL_CHECK"
         summary["error"] = "No score or reviews extracted after full URL traversal."
-        summary["data_quality_note"] = "No score or reviews extracted"
+        summary["data_quality_note"] = "Data not refreshed - no score or reviews readable"
     elif official_score is None:
-        summary["data_quality_note"] = "Platform score not extracted"
+        summary["data_quality_note"] = "Platform score not refreshed"
     elif official_review_count is None and not detected_review_count:
-        summary["data_quality_note"] = "Review count not extracted"
+        summary["data_quality_note"] = "Review count not refreshed"
     else:
         summary["data_quality_note"] = ""
     wording = analyze_review_wording(reviews)
@@ -696,21 +794,16 @@ def parse_history_timestamp(value):
 
 
 def current_score_value(summary):
-    for key in ("official_score", "global_score", "detected_score"):
-        score = summary.get(key)
-        if score is not None:
-            return score
+    score = summary.get("official_score")
+    if score is not None:
+        return score
     return None
 
 
 def current_review_count(summary):
-    for key in ("official_review_count", "review_count", "detected_review_count"):
-        count = summary.get(key)
-        if count is not None:
-            value = int(count)
-            if value == 0 and current_score_value(summary) is None:
-                continue
-            return value
+    count = summary.get("official_review_count")
+    if count is not None and current_score_value(summary) is not None:
+        return int(count)
     return None
 
 
@@ -878,9 +971,9 @@ def annotate_score_evolution_from_history(spreadsheet, summaries):
         summary["trend"] = label
         summary["trend_delta"] = delta
         if current_score is None:
-            summary["score_change"] = "Check required"
+            summary["score_change"] = "Not refreshed"
         elif previous_score is None:
-            summary["score_change"] = "No history"
+            summary["score_change"] = "No previous week"
         else:
             change = round(current_score - previous_score, 2)
             sign = "+" if change > 0 else ""
@@ -906,8 +999,8 @@ def append_history_rows(spreadsheet, summaries):
             summary.get("owner", ""),
             summary.get("platform", ""),
             summary["url"],
-            current_review_count(summary) if current_review_count(summary) is not None else "Check required",
-            current_score_value(summary) if current_score_value(summary) is not None else "Check required",
+            current_review_count(summary) if current_review_count(summary) is not None else "Not refreshed",
+            current_score_value(summary) if current_score_value(summary) is not None else "Not refreshed",
             summary.get("score_change", "No history"),
             summary.get("trend", "No history"),
             dashboard_risk_signal(summary),
@@ -939,8 +1032,8 @@ def append_history_rows(spreadsheet, summaries):
                 summary.get("owner", ""),
                 summary.get("platform", ""),
                 summary["url"],
-                current_review_count(summary) if current_review_count(summary) is not None else "Check required",
-                current_score_value(summary) if current_score_value(summary) is not None else "Check required",
+                current_review_count(summary) if current_review_count(summary) is not None else "Not refreshed",
+                current_score_value(summary) if current_score_value(summary) is not None else "Not refreshed",
                 summary.get("score_change", "No history"),
                 summary.get("trend", "No history"),
                 dashboard_risk_signal(summary),
@@ -967,8 +1060,8 @@ def dashboard_platform_score(item):
         return f"{score}/5"
     last_known = item.get("last_known_score")
     if last_known is not None:
-        return f"{last_known}/5 last known"
-    return "Check required"
+        return f"{last_known}/5 last verified"
+    return "Not refreshed"
 
 
 def dashboard_review_number(item):
@@ -977,38 +1070,38 @@ def dashboard_review_number(item):
         return review_count
     last_known = item.get("last_known_review_count")
     if last_known is not None:
-        return f"{last_known} last known"
-    return "Check required"
+        return f"{last_known} last verified"
+    return "Not refreshed"
 
 
 def dashboard_risk_signal(item):
     if item.get("last_known_score") is not None and current_score_value(item) is None:
-        return "Refresh needed"
+        return "Data not refreshed"
     if item.get("status") in {"ERROR", "TECHNICAL_CHECK"}:
-        return "Technical check"
+        return "Data unavailable"
     if current_score_value(item) is None or current_review_count(item) is None:
-        return "Technical check"
+        return "Data unavailable"
     if item.get("alert"):
-        return "Score alert"
+        return "Low product score"
     if item.get("critical_review_count", 0) > 0:
-        return "Critical reviews"
+        return "Critical low reviews"
     if item.get("low_review_count", 0) > 0:
-        return "Low reviews"
-    return "Clear"
+        return "Low reviews found"
+    return "Healthy"
 
 
 def dashboard_score_evolution(item):
     value = item.get("score_change") or "No history"
     if item.get("last_known_score") is not None and current_score_value(item) is None:
-        return "Refresh needed"
-    return "Check required" if str(value).lower() in {"no score", "score unavailable", "n/a"} else value
+        return "Not refreshed"
+    return "Not refreshed" if str(value).lower() in {"no score", "score unavailable", "n/a", "check required"} else value
 
 
 def dashboard_main_issue(item):
     if item.get("last_known_score") is not None and current_score_value(item) is None:
         timestamp = item.get("last_known_timestamp")
         suffix = f" from {timestamp}" if timestamp else ""
-        return f"Current URL unreadable - showing last known data{suffix}"
+        return f"Current page not readable - showing last verified data{suffix}"
     if item.get("data_quality_note"):
         return item["data_quality_note"]
     if item.get("main_issue"):
@@ -1047,7 +1140,7 @@ def google_rows_for_dashboard(summaries):
     rows = [
         ["Voxy weekly alert dashboard", ""],
         ["Products checked", len(summaries)],
-        ["Average score", average_score if average_score is not None else "Check required"],
+        ["Average score", average_score if average_score is not None else "Not refreshed"],
         ["Products needing attention", sum(1 for item in summaries if item.get("alert") or item.get("low_review_count", 0) or item.get("critical_review_count", 0))],
         ["Critical reviews", sum(int(item.get("critical_review_count", 0) or 0) for item in summaries)],
         [],
@@ -1147,9 +1240,9 @@ def build_summary_email_body(recipient, entries, timezone_name):
             f"Platform: {email_safe_text(summary.get('platform'))}",
             f"Status: {email_safe_text(base.product_health(summary))}",
             f"Score evolution: {email_safe_text(dashboard_score_evolution(summary))}",
-            f"Score: {current_score_value(summary) if current_score_value(summary) is not None else 'Check required'}/5",
-            *([f"Platform score: {summary.get('official_score')}/5 from {summary.get('official_review_count') or 'Check required'} reviews"] if summary.get("official_score") is not None else []),
-            f"Voxy sample: {summary.get('detected_score') if summary.get('detected_score') is not None else 'Check required'}/5 from {summary.get('detected_review_count') or 0} detected reviews",
+            f"Score: {current_score_value(summary) if current_score_value(summary) is not None else 'Not refreshed'}/5",
+            *([f"Platform score: {summary.get('official_score')}/5 from {summary.get('official_review_count') or 'Not refreshed'} reviews"] if summary.get("official_score") is not None else []),
+            f"Voxy sample: {summary.get('detected_score') if summary.get('detected_score') is not None else 'Not refreshed'}/5 from {summary.get('detected_review_count') or 0} detected reviews",
             f"Low reviews: {summary['low_review_count']}",
             f"Critical reviews < 3: {summary['critical_review_count']}",
             f"Action: {email_safe_text((summary.get('concrete_actions') or summary.get('suggestions') or ['Review product feedback'])[0], 1100)}",
@@ -1185,7 +1278,7 @@ def send_technical_issue_alert(summaries, timezone_name):
         lines.extend([
             f"{index}. {email_safe_text(summary.get('product'), 220)}",
             f"Platform: {email_safe_text(summary.get('platform'))}",
-            f"Status: {email_safe_text(summary.get('status') or 'Technical check')}",
+            f"Status: {email_safe_text(summary.get('status') or 'Data not refreshed')}",
             f"Issue: {email_safe_text(summary.get('error') or 'Missing score, review count, or readable review data.', 500)}",
             f"URL: {summary.get('url') or 'Not provided'}",
             "",

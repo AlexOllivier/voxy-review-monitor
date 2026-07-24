@@ -20,12 +20,20 @@ HISTORY_COLUMN_WIDTHS = [
 ]
 INDICATOR_COLORS = {
     "good": {"red": 0.84, "green": 0.96, "blue": 0.89},
+    "healthy": {"red": 0.84, "green": 0.96, "blue": 0.89},
     "clear": {"red": 0.84, "green": 0.96, "blue": 0.89},
     "watch": {"red": 1.0, "green": 0.95, "blue": 0.75},
     "low reviews": {"red": 1.0, "green": 0.90, "blue": 0.78},
+    "low reviews found": {"red": 1.0, "green": 0.90, "blue": 0.78},
     "critical reviews": {"red": 1.0, "green": 0.84, "blue": 0.84},
+    "critical low reviews": {"red": 1.0, "green": 0.84, "blue": 0.84},
     "score alert": {"red": 1.0, "green": 0.84, "blue": 0.84},
+    "low product score": {"red": 1.0, "green": 0.84, "blue": 0.84},
     "refresh needed": {"red": 1.0, "green": 0.95, "blue": 0.75},
+    "not refreshed": {"red": 1.0, "green": 0.95, "blue": 0.75},
+    "no previous week": {"red": 0.94, "green": 0.96, "blue": 0.98},
+    "data not refreshed": {"red": 1.0, "green": 0.95, "blue": 0.75},
+    "data unavailable": {"red": 0.92, "green": 0.87, "blue": 1.0},
     "technical check": {"red": 0.92, "green": 0.87, "blue": 1.0},
 }
 
