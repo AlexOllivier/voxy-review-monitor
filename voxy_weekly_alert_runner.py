@@ -5,6 +5,7 @@ import multiprocessing
 import os
 import re
 import sys
+import time
 import unicodedata
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -1063,6 +1064,14 @@ def product_timeout_seconds():
         return 120
 
 
+def max_parallel_products():
+    try:
+        value = int(os.environ.get("VOXY_MAX_PARALLEL_PRODUCTS", "3"))
+    except ValueError:
+        value = 3
+    return max(1, min(value, 6))
+
+
 def product_check_worker(product, result_queue):
     try:
         reviews = base.fetch_reviews(product)
@@ -1097,6 +1106,82 @@ def check_product_with_timeout(product):
     if status == "ok":
         return payload[0], payload[1]
     raise RuntimeError(payload[0] if payload else "Product check failed.")
+
+
+def stop_product_process(process):
+    if not process.is_alive():
+        return
+    process.terminate()
+    process.join(10)
+    if process.is_alive() and hasattr(process, "kill"):
+        process.kill()
+        process.join(5)
+
+
+def iter_product_checks(products):
+    max_parallel = max_parallel_products()
+    timeout_seconds = product_timeout_seconds()
+    if max_parallel <= 1:
+        for product in products:
+            print(f"Checking: {product.name}")
+            try:
+                reviews, summary = check_product_with_timeout(product)
+                yield product, reviews, summary, None
+            except Exception as exc:
+                yield product, [], None, exc
+        return
+
+    context = multiprocessing.get_context()
+    pending = []
+    remaining = iter(products)
+
+    def start_next_product():
+        try:
+            product = next(remaining)
+        except StopIteration:
+            return False
+        print(f"Checking: {product.name}")
+        result_queue = context.Queue()
+        process = context.Process(target=product_check_worker, args=(product, result_queue))
+        process.start()
+        pending.append({
+            "product": product,
+            "process": process,
+            "queue": result_queue,
+            "deadline": time.monotonic() + timeout_seconds if timeout_seconds > 0 else None,
+        })
+        return True
+
+    while len(pending) < max_parallel and start_next_product():
+        pass
+
+    while pending:
+        emitted_result = False
+        for job in list(pending):
+            product = job["product"]
+            process = job["process"]
+            deadline = job["deadline"]
+            if deadline is not None and time.monotonic() > deadline and process.is_alive():
+                stop_product_process(process)
+                pending.remove(job)
+                emitted_result = True
+                yield product, [], None, TimeoutError(f"Product check exceeded {timeout_seconds} seconds.")
+            elif not process.is_alive():
+                process.join()
+                pending.remove(job)
+                emitted_result = True
+                if job["queue"].empty():
+                    yield product, [], None, RuntimeError(f"Product check stopped without returning data. Exit code: {process.exitcode}.")
+                else:
+                    status, *payload = job["queue"].get()
+                    if status == "ok":
+                        yield product, payload[0], payload[1], None
+                    else:
+                        yield product, [], None, RuntimeError(payload[0] if payload else "Product check failed.")
+            while len(pending) < max_parallel and start_next_product():
+                pass
+        if not emitted_result:
+            time.sleep(0.25)
 
 
 def main():
@@ -1145,11 +1230,13 @@ def main():
 
     summaries = []
     alert_entries_by_recipient = {}
-    for product in products:
-        print(f"Checking: {product.name}")
-        try:
-            reviews, summary = check_product_with_timeout(product)
-        except Exception as exc:
+    print(
+        f"Voxy will check {len(products)} product(s) in automatic waves "
+        f"of up to {max_parallel_products()} product(s)."
+    )
+    for product, reviews, summary, error in iter_product_checks(products):
+        if error:
+            exc = error
             print(f"Error while checking {product.name}: {exc}")
             error_summary = base.summarize_error(product, exc)
             error_summary["city"] = getattr(product, "city", "")

@@ -64,6 +64,7 @@ jobs:
           DEEPL_API_KEY: ${{ secrets.DEEPL_API_KEY }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           VOXY_PRODUCT_TIMEOUT_SECONDS: "120"
+          VOXY_MAX_PARALLEL_PRODUCTS: "3"
         run: |
           FLAGS=""
           if [ "${{ github.event.inputs.baseline }}" = "true" ]; then
