@@ -740,10 +740,19 @@ def extract_script_json_reviews(html: str) -> list[Review]:
     return reviews
 
 
+def star_glyph_rating(value: str) -> float | None:
+    text = str(value or "")
+    if not any(symbol in text for symbol in ["★", "☆", "★", "☆"]):
+        return None
+    filled = text.count("★")
+    empty = text.count("☆")
+    return float(filled) if filled and filled + empty <= 5 else None
+
+
 def extract_visible_reviews(html: str) -> list[Review]:
     soup = BeautifulSoup(html, "html.parser")
     reviews: list[Review] = []
-    rating_pattern = re.compile(r"([1-5](?:[.,]\d+)?)\s*(/|out of|sur|stars?|etoiles?|étoiles?)", re.I)
+    rating_pattern = re.compile(r"([1-5](?:[.,]\d+)?)\s*(/|out of|sur|stars?|etoiles?|étoiles?|bubbles?)", re.I)
     candidates = soup.find_all(attrs={"aria-label": rating_pattern})
     candidates += soup.find_all(attrs={"title": rating_pattern})
 
@@ -776,6 +785,8 @@ def extract_visible_reviews(html: str) -> list[Review]:
                 break
         if rating is None:
             rating = rating_from_value(text[:250])
+        if rating is None:
+            rating = star_glyph_rating(text[:250])
         if rating is None or rating > 5:
             continue
         reviews.append(Review(rating=rating, text=text[:1600], source="visible-review-block"))
@@ -799,6 +810,40 @@ def extract_embedded_reviews(html: str) -> list[Review]:
             end = min(len(html), match.end() + 900)
             snippet = html_to_text(html[start:end])
             reviews.append(Review(rating=rating, text=snippet[:1600], source="embedded-rating-pattern"))
+    return reviews
+
+
+def extract_plain_text_reviews(text: str) -> list[Review]:
+    lines = [normalize_text(line) for line in str(text or "").splitlines()]
+    lines = [line for line in lines if line]
+    reviews: list[Review] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        rating = star_glyph_rating(line) or rating_from_value(line)
+        if rating is None or rating <= 0 or rating > 5:
+            index += 1
+            continue
+
+        title = lines[index + 1] if index + 1 < len(lines) else ""
+        meta = lines[index + 2] if index + 2 < len(lines) else ""
+        body_lines = []
+        cursor = index + 3
+        while cursor < len(lines):
+            next_line = lines[cursor]
+            if star_glyph_rating(next_line) or rating_from_value(next_line):
+                break
+            if re.search(r"^response from host\b|^read more\b|^see \d+ more reviews\b", next_line, re.I):
+                cursor += 1
+                continue
+            body_lines.append(next_line)
+            if len(" ".join(body_lines)) > 900:
+                break
+            cursor += 1
+        body = normalize_text(" ".join([title] + body_lines))
+        if body and len(body) > 20:
+            reviews.append(Review(rating=rating, text=body[:1600], author=meta, source="visible-page-text"))
+        index = max(cursor, index + 1)
     return reviews
 
 
@@ -882,7 +927,8 @@ def fetch_reviews(product: Product) -> list[Review]:
             "accept", "accepter", "j'accepte", "allow all", "tout accepter",
             "reviews", "avis", "customer reviews", "see reviews", "all reviews",
             "read reviews", "show more", "voir plus", "load more", "read more",
-            "more reviews", "tous les avis", "afficher plus"
+            "more reviews", "tous les avis", "afficher plus", "traveler reviews",
+            "see all reviews", "show all reviews", "more traveler reviews"
         ]
         for label in click_labels:
             for _ in range(3):
@@ -901,7 +947,7 @@ def fetch_reviews(product: Product) -> list[Review]:
                 height = previous_height
             page.mouse.wheel(0, 4200)
             page.wait_for_timeout(900)
-            for label in ["show more", "load more", "read more", "voir plus", "afficher plus", "more reviews", "tous les avis"]:
+            for label in ["show more", "load more", "read more", "voir plus", "afficher plus", "more reviews", "tous les avis", "traveler reviews", "see all reviews"]:
                 try:
                     page.get_by_text(re.compile(label, re.I)).first.click(timeout=900)
                     page.wait_for_timeout(800)
@@ -929,6 +975,7 @@ def fetch_reviews(product: Product) -> list[Review]:
         *extract_visible_reviews(html),
         *extract_embedded_reviews(html),
         *extract_visible_reviews(visible_text),
+        *extract_plain_text_reviews(visible_text),
     ])
 
 

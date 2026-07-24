@@ -167,8 +167,9 @@ def nearby_review_count(text, start, end, radius=180):
     window_end = min(len(text), end + radius)
     window = text[window_start:window_end]
     count_patterns = [
-        r"(\d[\d\s.,]*)\s*(?:reviews|review|avis|opiniones|recensioni|bewertungen|beoordelingen)",
-        r"(?:reviews|review|avis|opiniones|recensioni|bewertungen|beoordelingen)\s*(\d[\d\s.,]*)",
+        r"(\d[\d\s.,]*)\s*(?:reviews|review|traveler reviews|customer reviews|avis|opiniones|recensioni|bewertungen|beoordelingen)",
+        r"(?:reviews|review|traveler reviews|customer reviews|avis|opiniones|recensioni|bewertungen|beoordelingen)\s*(\d[\d\s.,]*)",
+        r"\((\d[\d\s.,]*)\)\s*(?:reviews|review|traveler reviews|customer reviews)",
     ]
     for pattern in count_patterns:
         match = re.search(pattern, window, flags=re.IGNORECASE)
@@ -185,10 +186,13 @@ def extract_rating_summary_from_text(text):
         return {}
 
     paired_patterns = [
-        r"(?<!\d)([1-5](?:[\.,]\d{1,2})?)\s*(?:/ ?5|out of 5|sur 5).{0,180}?(\d[\d\s.,]*)\s*(?:reviews|review|avis|opiniones|recensioni|bewertungen|beoordelingen)",
-        r"(?<!\d)([1-5](?:[\.,]\d{1,2})?)\s*(?:stars?|etoiles?)?.{0,120}?(\d[\d\s.,]*)\s*(?:reviews|review|avis|opiniones|recensioni|bewertungen|beoordelingen)",
-        r"(?<!\d)([1-5](?:[\.,]\d{1,2})?)\s+(\d[\d\s.,]*)\s*(?:reviews|review|avis|opiniones|recensioni|bewertungen|beoordelingen)",
-        r"(\d[\d\s.,]*)\s*(?:reviews|review|avis|opiniones|recensioni|bewertungen|beoordelingen).{0,180}?(?<!\d)([1-5](?:[\.,]\d{1,2})?)\s*(?:/ ?5|out of 5|sur 5)?",
+        r"(?<!\d)([1-5](?:[\.,]\d{1,2})?)\s*(?:based on|from)\s*(\d[\d\s.,]*)\s*(?:reviews|review|traveler reviews|customer reviews)",
+        r"(?:total reviews and rating from viator|reviews).{0,120}?(?<!\d)([1-5](?:[\.,]\d{1,2})?).{0,120}?(?:based on|from)\s*(\d[\d\s.,]*)\s*(?:reviews|review)",
+        r"(?<!\d)([1-5](?:[\.,]\d{1,2})?)\s*(?:/ ?5|out of 5|sur 5|of 5 bubbles|bubbles).{0,220}?(\d[\d\s.,]*)\s*(?:reviews|review|traveler reviews|customer reviews|avis|opiniones|recensioni|bewertungen|beoordelingen)",
+        r"(?<!\d)([1-5](?:[\.,]\d{1,2})?)\s*(?:stars?|etoiles?|bubbles)?.{0,160}?(\d[\d\s.,]*)\s*(?:reviews|review|traveler reviews|customer reviews|avis|opiniones|recensioni|bewertungen|beoordelingen)",
+        r"(?<!\d)([1-5](?:[\.,]\d{1,2})?)\s*\((\d[\d\s.,]*)\)\s*(?:reviews|review|traveler reviews|customer reviews)?",
+        r"(?<!\d)([1-5](?:[\.,]\d{1,2})?)\s+(\d[\d\s.,]*)\s*(?:reviews|review|traveler reviews|customer reviews|avis|opiniones|recensioni|bewertungen|beoordelingen)",
+        r"(\d[\d\s.,]*)\s*(?:reviews|review|traveler reviews|customer reviews|avis|opiniones|recensioni|bewertungen|beoordelingen).{0,220}?(?<!\d)([1-5](?:[\.,]\d{1,2})?)\s*(?:/ ?5|out of 5|sur 5|of 5 bubbles|bubbles)?",
     ]
     for pattern in paired_patterns:
         match = re.search(pattern, text, flags=re.IGNORECASE)
@@ -205,7 +209,7 @@ def extract_rating_summary_from_text(text):
             return {"score": round(score, 2), "review_count": count, "source": "visible page text"}
 
     score_patterns = [
-        r"(?<!\d)([1-5](?:[\.,]\d{1,2})?)\s*(?:/ ?5|out of 5|sur 5)",
+        r"(?<!\d)([1-5](?:[\.,]\d{1,2})?)\s*(?:/ ?5|out of 5|sur 5|of 5 bubbles|bubbles)",
         r"(?:rating|note|score)\s*[:\-]?\s*([1-5](?:[\.,]\d{1,2})?)",
     ]
     for pattern in score_patterns:
@@ -229,7 +233,7 @@ def url_variants_for_rating(url):
     add(url)
     clean_query = {
         key: value for key, value in base_query.items()
-        if key.lower() not in {"ranking_uuid", "visitor-id", "date_from", "date_to"}
+        if key.lower() not in {"ranking_uuid", "visitor-id", "date_from", "date_to", "pid", "mcid", "medium", "campaign", "target_lander"}
     }
     add(urlunparse(parsed._replace(query=urlencode(clean_query, doseq=True))))
 
@@ -243,6 +247,8 @@ def url_variants_for_rating(url):
             add(urlunparse(parsed._replace(query=urlencode(gyg_query, doseq=True))))
         else:
             add(urlunparse(parsed._replace(query=urlencode(gyg_query, doseq=True))))
+    if "viator." in parsed.netloc:
+        add(urlunparse(parsed._replace(query="")))
     return variants
 
 
@@ -254,8 +260,15 @@ def extract_rating_summary_from_browser_dom(page):
         pass
     try:
         snippets.append(page.evaluate("""
-            () => Array.from(document.querySelectorAll('[aria-label], [title], meta, script[type="application/ld+json"]'))
-              .map((node) => node.getAttribute('aria-label') || node.getAttribute('title') || node.getAttribute('content') || node.textContent || '')
+            () => Array.from(document.querySelectorAll('[aria-label], [title], [data-automation], [data-testid], meta, script[type="application/ld+json"], script[id*="NEXT"], script[id*="apollo"]'))
+              .map((node) => [
+                node.getAttribute('aria-label'),
+                node.getAttribute('title'),
+                node.getAttribute('content'),
+                node.getAttribute('data-automation'),
+                node.getAttribute('data-testid'),
+                node.textContent
+              ].filter(Boolean).join(' '))
               .filter(Boolean)
               .join(' ')
         """))
@@ -289,7 +302,8 @@ def extract_official_rating_summary(html):
         r'"averageRating"\s*:\s*"?(\d+(?:[\.,]\d+)?)"?[^{}]{0,250}"(?:reviewsCount|totalReviews|totalReviewCount)"\s*:\s*"?(\d+)"?',
         r'"(?:reviewsCount|totalReviews|totalReviewCount)"\s*:\s*"?(\d+)"?[^{}]{0,250}"averageRating"\s*:\s*"?(\d+(?:[\.,]\d+)?)"?',
         r'(\d+(?:[\.,]\d+)?)\s*/\s*5[^0-9]{0,80}(\d+)\s+(?:reviews|avis)',
-        r'(\d+(?:[\.,]\d+)?)\s+(\d+)\s+(?:reviews|avis)',
+        r'(\d+(?:[\.,]\d+)?)\s+(\d+)\s+(?:reviews|review|traveler reviews|customer reviews|avis)',
+        r'(\d+(?:[\.,]\d+)?)\s*(?:of 5 bubbles|bubbles)[^0-9]{0,100}(\d+)\s+(?:reviews|review|traveler reviews|customer reviews)',
     ]
     for pattern in patterns:
         match = re.search(pattern, decoded_html, flags=re.IGNORECASE)
@@ -306,9 +320,9 @@ def extract_official_rating_summary(html):
     meta_text = " ".join(
         value for value in (
             tag.get("content") or tag.get("aria-label") or tag.get("title") or ""
-            for tag in soup.find_all(["meta", "span", "div", "button"])
+            for tag in soup.find_all(["meta", "span", "div", "button", "a"])
         )
-        if value and re.search(r"rating|review|avis|etoile|star|/5|sur 5", value, re.I)
+        if value and re.search(r"rating|review|avis|etoile|star|bubble|traveler|/5|sur 5", value, re.I)
     )
     return (
         extract_rating_summary_from_text(meta_text)
@@ -323,6 +337,7 @@ def exhaust_product_page(page):
         "reviews", "avis", "customer reviews", "see reviews", "all reviews",
         "read reviews", "more reviews", "show more", "load more", "read more",
         "voir les avis", "tous les avis", "voir plus", "afficher plus",
+        "traveler reviews", "see all reviews", "show all reviews", "more traveler reviews",
     ]
     for label in click_labels:
         for _ in range(3):
@@ -341,7 +356,7 @@ def exhaust_product_page(page):
             height = previous_height
         page.mouse.wheel(0, 4200)
         page.wait_for_timeout(900)
-        for label in ["show more", "load more", "read more", "voir plus", "afficher plus", "more reviews", "tous les avis"]:
+        for label in ["show more", "load more", "read more", "voir plus", "afficher plus", "more reviews", "tous les avis", "traveler reviews", "see all reviews"]:
             try:
                 page.get_by_text(re.compile(label, re.I)).first.click(timeout=900)
                 page.wait_for_timeout(800)
