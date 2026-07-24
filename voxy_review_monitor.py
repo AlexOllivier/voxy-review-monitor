@@ -820,15 +820,34 @@ def dedupe_reviews(reviews: Iterable[Review]) -> list[Review]:
 
 def fetch_reviews(product: Product) -> list[Review]:
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True, args=["--no-sandbox"])
-        page = browser.new_page(
+        browser = playwright.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+            ],
+        )
+        context = browser.new_context(
             locale=product.language or "en",
+            timezone_id="Europe/Paris",
+            viewport={"width": 1440, "height": 1200},
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/125.0 Safari/537.36"
+                "Chrome/126.0.0.0 Safari/537.36"
             ),
+            extra_http_headers={
+                "Accept-Language": "en-US,en;q=0.9,fr;q=0.8",
+                "Upgrade-Insecure-Requests": "1",
+            },
         )
+        context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+            Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en', 'fr']});
+            Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+        """)
+        page = context.new_page()
         page.set_default_timeout(5000)
         page.goto(product.url, wait_until="domcontentloaded", timeout=90000)
         try:
@@ -836,6 +855,28 @@ def fetch_reviews(product: Product) -> list[Review]:
         except Exception:
             pass
         page.wait_for_timeout(2500)
+
+        blocked_markers = [
+            "just a moment",
+            "enable javascript and cookies",
+            "checking your browser",
+            "cf_chl",
+            "challenge-platform",
+        ]
+        for _ in range(4):
+            try:
+                blocked_html = page.content().lower()
+                blocked_text = page.locator("body").inner_text(timeout=5000).lower()
+            except Exception:
+                blocked_html = ""
+                blocked_text = ""
+            if not any(marker in blocked_html or marker in blocked_text for marker in blocked_markers):
+                break
+            page.wait_for_timeout(8000)
+            try:
+                page.reload(wait_until="domcontentloaded", timeout=45000)
+            except Exception:
+                pass
 
         click_labels = [
             "accept", "accepter", "j'accepte", "allow all", "tout accepter",
@@ -879,6 +920,7 @@ def fetch_reviews(product: Product) -> list[Review]:
             visible_text = page.locator("body").inner_text(timeout=10000)
         except Exception:
             visible_text = ""
+        context.close()
         browser.close()
 
     return dedupe_reviews([

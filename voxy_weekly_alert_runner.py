@@ -122,6 +122,10 @@ def rating_summary_from_json(value):
         count = review_count_from_value(
             aggregate.get("reviewCount")
             or aggregate.get("ratingCount")
+            or aggregate.get("reviewsCount")
+            or aggregate.get("totalReviews")
+            or aggregate.get("numberOfReviews")
+            or aggregate.get("reviews_count")
             or aggregate.get("count")
         )
         if rating is not None and 0 < rating <= 5:
@@ -278,28 +282,80 @@ def exhaust_product_page(page):
         pass
 
 
+def wait_for_real_product_page(page):
+    blocked_markers = [
+        "just a moment",
+        "enable javascript and cookies",
+        "checking your browser",
+        "cf_chl",
+        "challenge-platform",
+    ]
+    for _ in range(4):
+        try:
+            html = page.content().lower()
+            text = page.locator("body").inner_text(timeout=5000).lower()
+        except Exception:
+            html = ""
+            text = ""
+        if not any(marker in html or marker in text for marker in blocked_markers):
+            return True
+        page.wait_for_timeout(8000)
+        try:
+            page.reload(wait_until="domcontentloaded", timeout=45000)
+        except Exception:
+            pass
+    return False
+
+
+def new_stealth_page(browser, locale="en-US"):
+    context = browser.new_context(
+        locale=locale,
+        timezone_id="Europe/Paris",
+        viewport={"width": 1440, "height": 1200},
+        user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/126.0.0.0 Safari/537.36"
+        ),
+        extra_http_headers={
+            "Accept-Language": "en-US,en;q=0.9,fr;q=0.8",
+            "Upgrade-Insecure-Requests": "1",
+        },
+    )
+    context.add_init_script("""
+        Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+        Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en', 'fr']});
+        Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+    """)
+    return context, context.new_page()
+
+
 def fetch_official_rating_summary_with_browser(url):
     try:
         with base.sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True, args=["--no-sandbox"])
-            page = browser.new_page(
-                locale="fr-FR",
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/126.0 Safari/537.36"
-                ),
+            browser = playwright.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-dev-shm-usage",
+                ],
             )
+            context, page = new_stealth_page(browser, locale="en-US")
             page.goto(url, wait_until="domcontentloaded", timeout=45000)
             try:
                 page.wait_for_load_state("networkidle", timeout=15000)
             except Exception:
                 pass
             page.wait_for_timeout(2500)
+            real_page_loaded = wait_for_real_product_page(page)
             exhaust_product_page(page)
             html = page.content()
             visible_text = page.locator("body").inner_text(timeout=10000)
+            context.close()
             browser.close()
+        if not real_page_loaded:
+            return {"blocked": True, "source": "platform anti-bot challenge"}
         return (
             extract_official_rating_summary(html)
             or extract_rating_summary_from_text(visible_text)
@@ -487,6 +543,20 @@ def summarize_reviews(product, reviews):
     summary["detected_score"] = detected_score
     summary["detected_review_count"] = detected_review_count
     summary["city"] = getattr(product, "city", "")
+    if official.get("blocked"):
+        summary["status"] = "TECHNICAL_CHECK"
+        summary["error"] = "Blocked or unreadable URL: platform anti-bot page returned instead of product content."
+        summary["data_quality_note"] = "Blocked or unreadable URL"
+    elif official_score is None and not detected_review_count:
+        summary["status"] = "TECHNICAL_CHECK"
+        summary["error"] = "No score or reviews extracted after full URL traversal."
+        summary["data_quality_note"] = "No score or reviews extracted"
+    elif official_score is None:
+        summary["data_quality_note"] = "Platform score not extracted"
+    elif official_review_count is None and not detected_review_count:
+        summary["data_quality_note"] = "Review count not extracted"
+    else:
+        summary["data_quality_note"] = ""
     wording = analyze_review_wording(reviews)
     summary["main_issue"] = wording["main_issue"]
     summary["recommended_action"] = wording["recommended_action"]
@@ -845,6 +915,8 @@ def dashboard_score_evolution(item):
 
 
 def dashboard_main_issue(item):
+    if item.get("data_quality_note"):
+        return item["data_quality_note"]
     if item.get("main_issue"):
         return item["main_issue"]
     themes = [theme for theme in item.get("themes", []) if theme]
