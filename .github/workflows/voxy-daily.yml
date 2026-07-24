@@ -64,6 +64,7 @@ jobs:
           SMTP_FROM: ${{ secrets.SMTP_FROM }}
           SMTP_USE_TLS: ${{ secrets.SMTP_USE_TLS }}
           ALERT_SUBJECT_PREFIX: ${{ secrets.ALERT_SUBJECT_PREFIX }}
+          VOXY_FAILURE_ALERT_EMAIL: "alexandre.ollivier@voxcity.co.uk"
           TRANSLATE_REVIEWS_TO_ENGLISH: ${{ secrets.TRANSLATE_REVIEWS_TO_ENGLISH }}
           DEEPL_API_KEY: ${{ secrets.DEEPL_API_KEY }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
@@ -85,6 +86,19 @@ jobs:
             --report voxy_dashboard_report.xlsx \
             --timezone Europe/Paris \
             $FLAGS
+
+      - name: Notify workflow failure
+        if: failure()
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          SMTP_USE_TLS: ${{ secrets.SMTP_USE_TLS }}
+          VOXY_FAILURE_ALERT_EMAIL: "alexandre.ollivier@voxcity.co.uk"
+          GITHUB_RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python notify_workflow_failure.py
 
       - name: Upload dashboard
         if: always()

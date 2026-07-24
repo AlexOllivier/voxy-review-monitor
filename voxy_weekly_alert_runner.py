@@ -1057,6 +1057,40 @@ def build_summary_email_body(recipient, entries, timezone_name):
     return "\n".join(lines).strip()
 
 
+def failure_alert_email():
+    return os.environ.get("VOXY_FAILURE_ALERT_EMAIL", "alexandre.ollivier@voxcity.co.uk").strip()
+
+
+def send_technical_issue_alert(summaries, timezone_name):
+    recipient = failure_alert_email()
+    if not recipient:
+        return
+    technical_items = [
+        summary for summary in summaries
+        if summary.get("status") in {"ERROR", "TECHNICAL_CHECK"} or summary.get("error")
+    ]
+    if not technical_items:
+        return
+    now = datetime.now(ZoneInfo(timezone_name)).strftime("%Y-%m-%d %H:%M")
+    lines = [
+        "Voxy Technical Alert",
+        "",
+        f"Check time: {now} ({timezone_name})",
+        f"Product(s) needing technical attention: {len(technical_items)}",
+        "",
+    ]
+    for index, summary in enumerate(technical_items, start=1):
+        lines.extend([
+            f"{index}. {email_safe_text(summary.get('product'), 220)}",
+            f"Platform: {email_safe_text(summary.get('platform'))}",
+            f"Status: {email_safe_text(summary.get('status') or 'Technical check')}",
+            f"Issue: {email_safe_text(summary.get('error') or 'Missing score, review count, or readable review data.', 500)}",
+            f"URL: {summary.get('url') or 'Not provided'}",
+            "",
+        ])
+    base.try_send_email([recipient], "Voxy Technical Alert", "\n".join(lines).strip())
+
+
 def product_timeout_seconds():
     try:
         return int(os.environ.get("VOXY_PRODUCT_TIMEOUT_SECONDS", "180"))
@@ -1327,6 +1361,9 @@ def main():
             if not sheet_url:
                 raise RuntimeError("--update-google-sheet-dashboard requires GOOGLE_SHEET_URL or --sheet-url.")
             update_google_sheet_dashboard(sheet_url, summaries)
+
+    if not args.dry_run:
+        send_technical_issue_alert(summaries, args.timezone)
 
     base.save_seen(Path(args.state), new_seen)
     return 0
