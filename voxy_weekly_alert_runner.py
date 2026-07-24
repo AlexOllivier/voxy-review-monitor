@@ -391,7 +391,7 @@ def fetch_official_rating_summary(url):
 
 
 def concrete_action_for_review(review):
-    text = base.clean_review_text_for_email(review.text, max_chars=260) or "Review text not available."
+    text = plain_ascii_text(review_text_in_english(review), max_chars=260) or "Review text not available."
     lower_text = text.lower()
     if any(word in lower_text for word in ["wait", "waiting", "queue", "line", "late", "meeting point", "start time", "retard", "attente", "file"]):
         action = "Check the meeting point, start-time instructions, and queue handling against what the customer actually received."
@@ -567,12 +567,40 @@ def summarize_reviews(product, reviews):
     return summary
 
 
+def repair_mojibake_text(value):
+    text = str(value or "")
+    markers = ("Ã", "Â", "â", "ðŸ", "�")
+    if any(marker in text for marker in markers):
+        try:
+            repaired = text.encode("latin1", errors="ignore").decode("utf-8", errors="ignore")
+            if repaired and sum(repaired.count(marker) for marker in markers) < sum(text.count(marker) for marker in markers):
+                text = repaired
+        except Exception:
+            pass
+    replacements = {
+        "\u2018": "'",
+        "\u2019": "'",
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u2013": "-",
+        "\u2014": "-",
+        "\u2026": "...",
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return base.normalize_text(text)
+
+
 def plain_ascii_text(value, max_chars=900):
-    text = base.normalize_text(str(value or ""))
+    text = repair_mojibake_text(value)
     text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
     text = re.sub(r"[^A-Za-z0-9 .,;:!?()'\"/@&%+-]+", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text[:max_chars]
+
+
+def email_safe_text(value, max_chars=900):
+    return plain_ascii_text(value, max_chars=max_chars) or "Not provided"
 
 
 def review_text_in_english(review):
@@ -1007,20 +1035,20 @@ def build_summary_email_body(recipient, entries, timezone_name):
     for index, entry in enumerate(sorted_entries, start=1):
         summary = entry["summary"]
         lines.extend([
-            f"{index}. {summary['product']}",
-            f"Country: {summary.get('country') or 'Not provided'}",
-            f"City: {summary.get('city') or 'Not provided'}",
-            f"Owner: {summary.get('owner') or 'Not provided'}",
-            f"Priority: {summary.get('priority') or 'Medium'}",
-            f"Platform: {summary.get('platform') or 'Not provided'}",
-            f"Status: {base.product_health_with_icon(summary)}",
-            f"Trend: {base.trend_with_arrow(summary)}",
+            f"{index}. {email_safe_text(summary['product'], 220)}",
+            f"Country: {email_safe_text(summary.get('country'))}",
+            f"City: {email_safe_text(summary.get('city'))}",
+            f"Owner: {email_safe_text(summary.get('owner'))}",
+            f"Priority: {email_safe_text(summary.get('priority') or 'Medium')}",
+            f"Platform: {email_safe_text(summary.get('platform'))}",
+            f"Status: {email_safe_text(base.product_health(summary))}",
+            f"Score evolution: {email_safe_text(dashboard_score_evolution(summary))}",
             f"Score: {current_score_value(summary) if current_score_value(summary) is not None else 'Check required'}/5",
             *([f"Platform score: {summary.get('official_score')}/5 from {summary.get('official_review_count') or 'Check required'} reviews"] if summary.get("official_score") is not None else []),
             f"Voxy sample: {summary.get('detected_score') if summary.get('detected_score') is not None else 'Check required'}/5 from {summary.get('detected_review_count') or 0} detected reviews",
             f"Low reviews: {summary['low_review_count']}",
             f"Critical reviews < 3: {summary['critical_review_count']}",
-            f"Action: {(summary.get('concrete_actions') or summary.get('suggestions') or ['Review product feedback'])[0]}",
+            f"Action: {email_safe_text((summary.get('concrete_actions') or summary.get('suggestions') or ['Review product feedback'])[0], 1100)}",
             f"Link: {summary['url']}",
             "",
         ])
