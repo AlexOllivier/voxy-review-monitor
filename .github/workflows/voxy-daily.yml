@@ -25,7 +25,7 @@ on:
 jobs:
   voxy:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
 
     steps:
       - name: Checkout
@@ -63,6 +63,7 @@ jobs:
           TRANSLATE_REVIEWS_TO_ENGLISH: ${{ secrets.TRANSLATE_REVIEWS_TO_ENGLISH }}
           DEEPL_API_KEY: ${{ secrets.DEEPL_API_KEY }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          VOXY_PRODUCT_TIMEOUT_SECONDS: "120"
         run: |
           FLAGS=""
           if [ "${{ github.event.inputs.baseline }}" = "true" ]; then

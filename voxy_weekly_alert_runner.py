@@ -1,6 +1,7 @@
 import argparse
 import hashlib
 import json
+import multiprocessing
 import os
 import re
 import sys
@@ -1055,6 +1056,49 @@ def build_summary_email_body(recipient, entries, timezone_name):
     return "\n".join(lines).strip()
 
 
+def product_timeout_seconds():
+    try:
+        return int(os.environ.get("VOXY_PRODUCT_TIMEOUT_SECONDS", "120"))
+    except ValueError:
+        return 120
+
+
+def product_check_worker(product, result_queue):
+    try:
+        reviews = base.fetch_reviews(product)
+        summary = summarize_reviews(product, reviews)
+        result_queue.put(("ok", reviews, summary))
+    except Exception as exc:
+        result_queue.put(("error", f"{type(exc).__name__}: {exc}"))
+
+
+def check_product_with_timeout(product):
+    timeout_seconds = product_timeout_seconds()
+    if timeout_seconds <= 0:
+        reviews = base.fetch_reviews(product)
+        summary = summarize_reviews(product, reviews)
+        return reviews, summary
+
+    context = multiprocessing.get_context()
+    result_queue = context.Queue()
+    process = context.Process(target=product_check_worker, args=(product, result_queue))
+    process.start()
+    process.join(timeout_seconds)
+    if process.is_alive():
+        process.terminate()
+        process.join(10)
+        if process.is_alive() and hasattr(process, "kill"):
+            process.kill()
+            process.join(5)
+        raise TimeoutError(f"Product check exceeded {timeout_seconds} seconds.")
+    if result_queue.empty():
+        raise RuntimeError(f"Product check stopped without returning data. Exit code: {process.exitcode}.")
+    status, *payload = result_queue.get()
+    if status == "ok":
+        return payload[0], payload[1]
+    raise RuntimeError(payload[0] if payload else "Product check failed.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Monitor reviews and send selective bad-review alerts.")
     parser.add_argument("--xlsx", default="template_surveillance_avis_multi_plateformes.xlsx")
@@ -1104,7 +1148,7 @@ def main():
     for product in products:
         print(f"Checking: {product.name}")
         try:
-            reviews = base.fetch_reviews(product)
+            reviews, summary = check_product_with_timeout(product)
         except Exception as exc:
             print(f"Error while checking {product.name}: {exc}")
             error_summary = base.summarize_error(product, exc)
@@ -1123,7 +1167,6 @@ def main():
             if skipped:
                 print(f"Skipped {skipped} review(s) dated before {local_today.isoformat()} ({args.timezone}).")
 
-        summary = summarize_reviews(product, reviews)
         summaries.append(summary)
         low_reviews = [
             review for review in current_reviews
