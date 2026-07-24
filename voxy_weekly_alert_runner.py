@@ -1018,6 +1018,33 @@ def update_google_sheet_dashboard(sheet_url, summaries):
     print("Shared Google Sheet alert dashboard updated.")
 
 
+def update_google_sheet_dashboard_live(sheet_url, summaries):
+    if not summaries:
+        return
+    client = base.google_client_from_env()
+    if client is None:
+        raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON is required to update the shared Google Sheet dashboard.")
+    spreadsheet = client.open_by_url(sheet_url)
+    annotate_score_evolution_from_history(spreadsheet, summaries)
+    dashboard = base.get_or_create_worksheet(spreadsheet, "Dashboard", rows=max(100, len(summaries) + 10), cols=11)
+    dashboard.resize(rows=max(100, len(summaries) + 10), cols=11)
+    dashboard.clear()
+    dashboard.update(base.rectangularize_rows(google_rows_for_dashboard(summaries)), value_input_option="USER_ENTERED")
+    dashboard.freeze(rows=7, cols=1)
+    print(f"Live dashboard updated with {len(summaries)} completed product(s).")
+
+
+def maybe_update_live_dashboard(args, sheet_url, summaries):
+    if not args.update_google_sheet_dashboard:
+        return
+    if not sheet_url:
+        raise RuntimeError("--update-google-sheet-dashboard requires GOOGLE_SHEET_URL or --sheet-url.")
+    try:
+        update_google_sheet_dashboard_live(sheet_url, summaries)
+    except Exception as exc:
+        print(f"Live dashboard update skipped after temporary error: {exc}")
+
+
 def build_summary_email_body(recipient, entries, timezone_name):
     now = datetime.now(ZoneInfo(timezone_name)).strftime("%Y-%m-%d %H:%M")
     sorted_entries = sorted(entries, key=email_entry_sort_key)
@@ -1294,6 +1321,7 @@ def main():
                 error_summary = base.summarize_error(product, retry_error)
                 error_summary["city"] = getattr(product, "city", "")
                 summaries.append(error_summary)
+                maybe_update_live_dashboard(args, sheet_url, summaries)
                 continue
 
         for review in reviews:
@@ -1308,6 +1336,7 @@ def main():
                 print(f"Skipped {skipped} review(s) dated before {local_today.isoformat()} ({args.timezone}).")
 
         summaries.append(summary)
+        maybe_update_live_dashboard(args, sheet_url, summaries)
         low_reviews = [
             review for review in current_reviews
             if review.rating <= product.threshold and base.seen_key(product, review) not in seen

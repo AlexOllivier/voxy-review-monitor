@@ -10,6 +10,7 @@ import voxy_weekly_alert_runner as runner
 
 
 ORIGINAL_UPDATE_GOOGLE_SHEET_DASHBOARD = runner.update_google_sheet_dashboard
+ORIGINAL_UPDATE_GOOGLE_SHEET_DASHBOARD_LIVE = runner.update_google_sheet_dashboard_live
 DASHBOARD_URL = "https://docs.google.com/spreadsheets/d/1XC_qHi4iPQeU9ashkwwaspw2tpVFWD-hWSTB8YuVy7A/edit?usp=sharing"
 DASHBOARD_COLUMN_WIDTHS = [360, 95, 120, 165, 120, 135, 125, 125, 145, 190, 380]
 HISTORY_COLUMN_WIDTHS = [
@@ -309,6 +310,20 @@ def apply_history_layout(spreadsheet):
 
 def centered_update_google_sheet_dashboard(sheet_url, summaries):
     ORIGINAL_UPDATE_GOOGLE_SHEET_DASHBOARD(sheet_url, summaries)
+    format_live_dashboard(sheet_url, summaries)
+    client = base.google_client_from_env()
+    if client is not None:
+        apply_history_layout(client.open_by_url(sheet_url))
+    print("Dashboard cells centered.")
+
+
+def centered_update_google_sheet_dashboard_live(sheet_url, summaries):
+    ORIGINAL_UPDATE_GOOGLE_SHEET_DASHBOARD_LIVE(sheet_url, summaries)
+    format_live_dashboard(sheet_url, summaries)
+    print("Live dashboard cells centered.")
+
+
+def format_live_dashboard(sheet_url, summaries):
     client = base.google_client_from_env()
     if client is None:
         return
@@ -353,12 +368,11 @@ def centered_update_google_sheet_dashboard(sheet_url, summaries):
         "backgroundColor": {"red": 0.91, "green": 0.94, "blue": 0.98},
     })
     apply_dashboard_layout(spreadsheet, dashboard, summaries)
-    apply_history_layout(spreadsheet)
-    print("Dashboard cells centered.")
 
 
 base.try_send_email = try_send_newsletter_email
 runner.update_google_sheet_dashboard = centered_update_google_sheet_dashboard
+runner.update_google_sheet_dashboard_live = centered_update_google_sheet_dashboard_live
 
 
 if __name__ == "__main__":
