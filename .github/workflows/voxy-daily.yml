@@ -22,10 +22,14 @@ on:
   schedule:
     - cron: "0 7 * * 1"
 
+concurrency:
+  group: voxy-weekly-review-analysis
+  cancel-in-progress: false
+
 jobs:
   voxy:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
 
     steps:
       - name: Checkout
@@ -63,8 +67,9 @@ jobs:
           TRANSLATE_REVIEWS_TO_ENGLISH: ${{ secrets.TRANSLATE_REVIEWS_TO_ENGLISH }}
           DEEPL_API_KEY: ${{ secrets.DEEPL_API_KEY }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          VOXY_PRODUCT_TIMEOUT_SECONDS: "120"
-          VOXY_MAX_PARALLEL_PRODUCTS: "3"
+          VOXY_PRODUCT_TIMEOUT_SECONDS: "180"
+          VOXY_MAX_PARALLEL_PRODUCTS: "2"
+          VOXY_PRODUCT_RETRY_ATTEMPTS: "1"
         run: |
           FLAGS=""
           if [ "${{ github.event.inputs.baseline }}" = "true" ]; then

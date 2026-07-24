@@ -1059,17 +1059,25 @@ def build_summary_email_body(recipient, entries, timezone_name):
 
 def product_timeout_seconds():
     try:
-        return int(os.environ.get("VOXY_PRODUCT_TIMEOUT_SECONDS", "120"))
+        return int(os.environ.get("VOXY_PRODUCT_TIMEOUT_SECONDS", "180"))
     except ValueError:
-        return 120
+        return 180
 
 
 def max_parallel_products():
     try:
-        value = int(os.environ.get("VOXY_MAX_PARALLEL_PRODUCTS", "3"))
+        value = int(os.environ.get("VOXY_MAX_PARALLEL_PRODUCTS", "2"))
     except ValueError:
-        value = 3
+        value = 2
     return max(1, min(value, 6))
+
+
+def product_retry_attempts():
+    try:
+        value = int(os.environ.get("VOXY_PRODUCT_RETRY_ATTEMPTS", "1"))
+    except ValueError:
+        value = 1
+    return max(0, min(value, 2))
 
 
 def product_check_worker(product, result_queue):
@@ -1232,16 +1240,27 @@ def main():
     alert_entries_by_recipient = {}
     print(
         f"Voxy will check {len(products)} product(s) in automatic waves "
-        f"of up to {max_parallel_products()} product(s)."
+        f"of up to {max_parallel_products()} product(s), "
+        f"with {product_timeout_seconds()} seconds per product and "
+        f"{product_retry_attempts()} retry attempt(s)."
     )
     for product, reviews, summary, error in iter_product_checks(products):
         if error:
-            exc = error
-            print(f"Error while checking {product.name}: {exc}")
-            error_summary = base.summarize_error(product, exc)
-            error_summary["city"] = getattr(product, "city", "")
-            summaries.append(error_summary)
-            continue
+            retry_error = error
+            for attempt in range(1, product_retry_attempts() + 1):
+                print(f"Retrying {product.name} after error: {retry_error} (attempt {attempt})")
+                try:
+                    reviews, summary = check_product_with_timeout(product)
+                    retry_error = None
+                    break
+                except Exception as exc:
+                    retry_error = exc
+            if retry_error:
+                print(f"Error while checking {product.name}: {retry_error}")
+                error_summary = base.summarize_error(product, retry_error)
+                error_summary["city"] = getattr(product, "city", "")
+                summaries.append(error_summary)
+                continue
 
         for review in reviews:
             new_seen.add(base.seen_key(product, review))
