@@ -25,6 +25,7 @@ INDICATOR_COLORS = {
     "low reviews": {"red": 1.0, "green": 0.90, "blue": 0.78},
     "critical reviews": {"red": 1.0, "green": 0.84, "blue": 0.84},
     "score alert": {"red": 1.0, "green": 0.84, "blue": 0.84},
+    "refresh needed": {"red": 1.0, "green": 0.95, "blue": 0.75},
     "technical check": {"red": 0.92, "green": 0.87, "blue": 1.0},
 }
 

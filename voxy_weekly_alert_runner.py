@@ -707,8 +707,25 @@ def current_review_count(summary):
     for key in ("official_review_count", "review_count", "detected_review_count"):
         count = summary.get(key)
         if count is not None:
-            return int(count)
+            value = int(count)
+            if value == 0 and current_score_value(summary) is None:
+                continue
+            return value
     return None
+
+
+def display_score_value(summary):
+    score = current_score_value(summary)
+    if score is not None:
+        return score
+    return summary.get("last_known_score")
+
+
+def display_review_count(summary):
+    review_count = current_review_count(summary)
+    if review_count is not None:
+        return review_count
+    return summary.get("last_known_review_count")
 
 
 def metric_from_history_row(row, headers):
@@ -744,6 +761,35 @@ def metric_from_history_row(row, headers):
             if score is not None:
                 return product, int(number), score
     return None
+
+
+def latest_metrics_from_history_rows(rows):
+    latest = {}
+    if len(rows) < 2:
+        return latest
+    headers = [header.strip().lower() for header in rows[0]]
+    try:
+        timestamp_index = headers.index("run timestamp")
+    except ValueError:
+        return latest
+    for row in rows[1:]:
+        if len(row) <= timestamp_index:
+            continue
+        timestamp = parse_history_timestamp(row[timestamp_index])
+        if timestamp is None:
+            continue
+        metric = metric_from_history_row(row, headers)
+        if metric is None:
+            continue
+        product, review_count, score = metric
+        current = latest.get(product)
+        if current is None or timestamp > current["timestamp"]:
+            latest[product] = {
+                "timestamp": timestamp,
+                "score": score,
+                "review_count": review_count,
+            }
+    return latest
 
 
 def previous_week_metrics_from_history_rows(rows, now=None):
@@ -813,6 +859,7 @@ def existing_review_ids(rows):
 
 def annotate_score_evolution_from_history(spreadsheet, summaries):
     _, rows = prepared_history_worksheet(spreadsheet, summaries, reset_incompatible=False)
+    latest_metrics = latest_metrics_from_history_rows(rows)
     previous_metrics = previous_week_metrics_from_history_rows(rows)
     for summary in summaries:
         current_score = current_score_value(summary)
@@ -820,6 +867,11 @@ def annotate_score_evolution_from_history(spreadsheet, summaries):
         if current_score is None or current_reviews is None:
             summary["status"] = "TECHNICAL_CHECK"
             summary["error"] = "Missing score or review count for this URL."
+            latest = latest_metrics.get(summary["product"])
+            if latest:
+                summary["last_known_score"] = latest["score"]
+                summary["last_known_review_count"] = latest["review_count"]
+                summary["last_known_timestamp"] = latest["timestamp"].strftime("%Y-%m-%d %H:%M")
         previous = previous_metrics.get(summary["product"])
         previous_score = previous["score"] if previous else None
         label, delta = base.trend_label(current_score, previous_score)
@@ -911,19 +963,27 @@ def append_history_rows(spreadsheet, summaries):
 
 def dashboard_platform_score(item):
     score = current_score_value(item)
-    return f"{score}/5" if score is not None else "Check required"
+    if score is not None:
+        return f"{score}/5"
+    last_known = item.get("last_known_score")
+    if last_known is not None:
+        return f"{last_known}/5 last known"
+    return "Check required"
 
 
 def dashboard_review_number(item):
-    review_count = item.get("official_review_count")
-    if review_count is None:
-        review_count = item.get("review_count")
-    if review_count is None:
-        review_count = item.get("detected_review_count")
-    return review_count if review_count is not None else "Check required"
+    review_count = current_review_count(item)
+    if review_count is not None:
+        return review_count
+    last_known = item.get("last_known_review_count")
+    if last_known is not None:
+        return f"{last_known} last known"
+    return "Check required"
 
 
 def dashboard_risk_signal(item):
+    if item.get("last_known_score") is not None and current_score_value(item) is None:
+        return "Refresh needed"
     if item.get("status") in {"ERROR", "TECHNICAL_CHECK"}:
         return "Technical check"
     if current_score_value(item) is None or current_review_count(item) is None:
@@ -939,10 +999,16 @@ def dashboard_risk_signal(item):
 
 def dashboard_score_evolution(item):
     value = item.get("score_change") or "No history"
+    if item.get("last_known_score") is not None and current_score_value(item) is None:
+        return "Refresh needed"
     return "Check required" if str(value).lower() in {"no score", "score unavailable", "n/a"} else value
 
 
 def dashboard_main_issue(item):
+    if item.get("last_known_score") is not None and current_score_value(item) is None:
+        timestamp = item.get("last_known_timestamp")
+        suffix = f" from {timestamp}" if timestamp else ""
+        return f"Current URL unreadable - showing last known data{suffix}"
     if item.get("data_quality_note"):
         return item["data_quality_note"]
     if item.get("main_issue"):
@@ -976,13 +1042,14 @@ def email_entry_sort_key(entry):
 
 
 def google_rows_for_dashboard(summaries):
-    global_summary = base.build_global_synthesis(summaries)
+    display_scores = [display_score_value(item) for item in summaries if display_score_value(item) is not None]
+    average_score = round(sum(display_scores) / len(display_scores), 2) if display_scores else None
     rows = [
         ["Voxy weekly alert dashboard", ""],
-        ["Products checked", global_summary["product_count"]],
-        ["Average score", global_summary["average_score"] if global_summary["average_score"] is not None else "Check required"],
+        ["Products checked", len(summaries)],
+        ["Average score", average_score if average_score is not None else "Check required"],
         ["Products needing attention", sum(1 for item in summaries if item.get("alert") or item.get("low_review_count", 0) or item.get("critical_review_count", 0))],
-        ["Critical reviews", global_summary["critical_reviews"]],
+        ["Critical reviews", sum(int(item.get("critical_review_count", 0) or 0) for item in summaries)],
         [],
         ["Product", "Country", "City", "Owner", "Platform", "Score evolution", "Platform score", "Review number", "Risk signal", "Main issue", "Recommended action"],
     ]
@@ -1043,6 +1110,14 @@ def maybe_update_live_dashboard(args, sheet_url, summaries):
         update_google_sheet_dashboard_live(sheet_url, summaries)
     except Exception as exc:
         print(f"Live dashboard update skipped after temporary error: {exc}")
+
+
+def product_order_key(product):
+    return (getattr(product, "name", ""), getattr(product, "url", ""))
+
+
+def summary_order_key(summary):
+    return (summary.get("product", ""), summary.get("url", ""))
 
 
 def build_summary_email_body(recipient, entries, timezone_name):
@@ -1298,6 +1373,7 @@ def main():
         return 0
 
     summaries = []
+    product_order = {product_order_key(product): index for index, product in enumerate(products)}
     alert_entries_by_recipient = {}
     print(
         f"Voxy will check {len(products)} product(s) in automatic waves "
@@ -1321,6 +1397,7 @@ def main():
                 error_summary = base.summarize_error(product, retry_error)
                 error_summary["city"] = getattr(product, "city", "")
                 summaries.append(error_summary)
+                summaries.sort(key=lambda item: product_order.get(summary_order_key(item), 999999))
                 maybe_update_live_dashboard(args, sheet_url, summaries)
                 continue
 
@@ -1336,6 +1413,7 @@ def main():
                 print(f"Skipped {skipped} review(s) dated before {local_today.isoformat()} ({args.timezone}).")
 
         summaries.append(summary)
+        summaries.sort(key=lambda item: product_order.get(summary_order_key(item), 999999))
         maybe_update_live_dashboard(args, sheet_url, summaries)
         low_reviews = [
             review for review in current_reviews
